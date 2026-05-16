@@ -1,0 +1,189 @@
+=====================================
+  HG.Cash Webhook Gateway
+  Guia de inicio rapido
+=====================================
+
+ESTRUCTURA
+----------
+cashgateway/
+  alters.sql          <- Schema MySQL + seed (admin + demo)
+  README.md
+  server/             <- Backend Express (Node.js)
+    app.js / server.js
+    config/           database, redis, env
+    controllers/      auth, webhook, movements, accounts, domains, dashboard, deliveries
+    routes/           7 archivos de rutas
+    services/         accountResolver, movement, webhookForward, socket, stats
+    queues/           webhookQueue + webhookWorker (BullMQ)
+    middlewares/      auth (JWT cookie), error, rawBody
+    utils/            hmac, logger (Winston), validators
+  client/             <- Frontend React + Vite + MUI
+    src/
+      pages/          Login, Dashboard, Movements, Deliveries, Accounts, Domains
+      components/     Layout (sidebar), StatusChip (badges)
+      contexts/       Auth, Theme (claro/oscuro persistente)
+      lib/            api (axios), socket (Socket.IO)
+
+
+PARA EMPEZAR
+------------
+
+1. BASE DE DATOS
+   Importar en MySQL (crea DB, tablas, indices y datos de ejemplo):
+
+   mysql -u root -p < alters.sql
+
+   Esto crea:
+   - Usuario admin: admin@hgcash.com / admin123
+   - Dominio de ejemplo: "Demo Project"
+   - Cuenta HG de ejemplo: AGROFORESTAL PAMPA
+
+2. BACKEND (abrir DOS terminales en /server)
+
+   Terminal 1 - Servidor principal:
+   cd server
+   npm install
+   npm run dev
+
+   Terminal 2 - Worker de colas BullMQ:
+   cd server
+   npm run worker
+
+3. FRONTEND
+
+   cd client
+   npm run dev
+
+   Abrir en el navegador: http://localhost:5173
+
+
+LOGIN
+-----
+  Email:      admin@hgcash.com
+  Contrasena: admin123
+
+
+CURL DE PRUEBA (simular webhook del proveedor)
+----------------------------------------------
+curl -X POST http://localhost:3000/api/webhooks/provider/hgcash/gw-token-agroforestal-2024 \
+  -H "Content-Type: application/json" \
+  -H "x-provider-token: prov-token-123" \
+  -d '{
+    "id": "b1642cbc-9458-4f08-aae2-72c285783fda",
+    "externalID": "E-WGRXJE27DPD7L566N7MYQL-2026-05-16 14:36:59",
+    "amount": "1000",
+    "currency": "ARS",
+    "direction": "Inbound",
+    "status": "done",
+    "type": "inbound",
+    "date": "2026-05-16T14:36:59",
+    "timezone": "America/Argentina/Buenos_Aires",
+    "fromName": "Matias Ariel Herrera",
+    "toName": "AGROFORESTAL PAMPA S.A",
+    "fromCBU": "0000003100060633019400",
+    "toCBU": "0000151500036579912174",
+    "fromCUIT": "23370206309",
+    "toCUIT": "30718856740",
+    "coelsaCode": "WGRXJE27DPD7L566N7MYQL",
+    "accountId": "c68ec492-6a49-40f1-8060-7c1cb38ac1f9"
+  }'
+
+
+BUGS CORREGIDOS DURANTE EL DESARROLLO
+--------------------------------------
+1. movementsController: el filtro delivery_status se construia fuera del WHERE.
+   Corregido con EXISTS subquery — ahora el filtro se aplica correctamente.
+
+2. app.js: express.json() global consumia el stream del body antes que
+   el rawBodyMiddleware de la ruta webhook.
+   Corregido: se agrego la opcion verify al parser global para capturar
+   el raw body en todas las rutas sin conflicto.
+
+3. movementsController: GROUP BY m.id con SELECT * podia fallar en
+   MySQL con ONLY_FULL_GROUP_BY activado (modo strict por defecto).
+   Corregido: se elimino el GROUP BY y se reemplazaron las columnas
+   implicitas por una lista explicita de campos.
+
+
+ENDPOINTS PRINCIPALES
+---------------------
+POST   /api/auth/login
+POST   /api/auth/logout
+GET    /api/auth/me
+
+GET    /api/dashboard/stats
+
+GET    /api/movements
+GET    /api/movements/:id
+GET    /api/movements/:id/deliveries
+
+GET    /api/deliveries
+POST   /api/deliveries/:id/retry
+
+GET    /api/accounts
+POST   /api/accounts
+PUT    /api/accounts/:id
+DELETE /api/accounts/:id
+
+GET    /api/domains
+POST   /api/domains
+PUT    /api/domains/:id
+DELETE /api/domains/:id
+
+POST   /api/webhooks/provider/hgcash/:gateway_token
+
+
+EVENTOS SOCKET.IO (tiempo real)
+--------------------------------
+  movement:new       <- nuevo movimiento recibido
+  movement:updated   <- movimiento actualizado
+  delivery:updated   <- estado de entrega cambiado
+  stats:updated      <- estadisticas del dashboard actualizadas
+
+
+REINTENTOS AUTOMATICOS (BullMQ)
+--------------------------------
+  Intento 1: inmediato
+  Intento 2: 5 segundos
+  Intento 3: 10 segundos
+  Intento 4: 20 segundos
+  Intento 5: 40 segundos
+  Backoff exponencial. Maximo 5 intentos.
+  Luego se marca como "failed" y se puede reintentar manualmente.
+
+
+VARIABLES DE ENTORNO (server/.env)
+------------------------------------
+  PORT=3000
+  NODE_ENV=development
+  FRONTEND_URL=http://localhost:5173
+  MYSQL_HOST=localhost
+  MYSQL_PORT=3306
+  MYSQL_USER=root
+  MYSQL_PASSWORD=
+  MYSQL_DATABASE=hgcash_gateway
+  JWT_SECRET=super_secret_jwt_key_change_in_production_2024
+  JWT_EXPIRES_IN=1h
+  COOKIE_NAME=hgcash_gateway_token
+  REDIS_HOST=127.0.0.1
+  REDIS_PORT=6379
+  PUBLIC_WEBHOOK_BASE_URL=https://midominio.com
+
+
+VARIABLES DE ENTORNO (client/.env)
+------------------------------------
+  VITE_API_URL=http://localhost:3000/api
+  VITE_SOCKET_URL=http://localhost:3000
+
+
+CHECKLIST PARA PRODUCCION
+--------------------------
+  [ ] Cambiar JWT_SECRET por un valor aleatorio largo
+  [ ] Configurar MYSQL_PASSWORD
+  [ ] Configurar PUBLIC_WEBHOOK_BASE_URL con el dominio real
+  [ ] Configurar Redis con contrasena si aplica
+  [ ] Habilitar HTTPS (reverse proxy con nginx)
+  [ ] Cambiar contrasena del admin desde la base de datos
+  [ ] NODE_ENV=production (activa cookie secure automaticamente)
+
+=====================================
