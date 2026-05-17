@@ -114,7 +114,7 @@ Abrir: http://localhost:5173
 | `COOKIE_NAME` | `hgcash_gateway_token` | Nombre de la cookie |
 | `REDIS_HOST` | `127.0.0.1` | Host Redis |
 | `REDIS_PORT` | `6379` | Puerto Redis |
-| `PUBLIC_WEBHOOK_BASE_URL` | `https://midominio.com` | Base URL pública del gateway |
+| `PUBLIC_WEBHOOK_BASE_URL` | `https://flowhg.online` | Base URL pública del gateway |
 
 ### Frontend (`client/.env`)
 
@@ -170,7 +170,15 @@ DELETE /api/domains/:id
 
 ### Webhook (recepción desde proveedor)
 ```
-POST /api/webhooks/provider/hgcash/:gateway_token
+POST /api/webhooks/provider/hgcash/:gateway_token          # Movimiento nuevo
+POST /api/webhooks/provider/hgcash/:gateway_token/update   # Update de movimiento
+```
+
+En producción con `flowhg.online`:
+
+```
+POST https://flowhg.online/api/webhooks/provider/hgcash/:gateway_token
+POST https://flowhg.online/api/webhooks/provider/hgcash/:gateway_token/update
 ```
 
 Headers esperados:

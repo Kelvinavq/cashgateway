@@ -269,8 +269,7 @@ export default function Layout({ children }) {
         sx={{
           flexGrow: 1,
           minWidth: 0,
-          width: { xs: '100%', sm: `calc(100% - ${DRAWER_WIDTH}px)` },
-          ml: { sm: `${DRAWER_WIDTH}px` },
+          width: { xs: '100%', sm: `calc(100vw - ${DRAWER_WIDTH}px)` },
           mt: { xs: '52px', sm: 0 },
           bgcolor: 'background.default',
           minHeight: '100vh',
@@ -285,6 +284,7 @@ export default function Layout({ children }) {
             mx: 'auto',
             width: '100%',
             minWidth: 0,
+            overflowX: 'hidden',
           }}
         >
           {children}
