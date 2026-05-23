@@ -1,13 +1,34 @@
 const { v4: uuidv4 } = require('uuid');
 const { pool } = require('../config/database');
-const { resolveAccountForMovement } = require('../services/accountResolverService');
-const { saveMovement, updateMovement, createDelivery } = require('../services/movementService');
+const { resolveDestinationsForWebhook, collectDestinationHints } = require('../services/domainResolverService');
+const { saveMovement, updateMovement, syncDeliveriesForMovement } = require('../services/movementService');
 const { webhookQueue } = require('../queues/webhookQueue');
 const socketService = require('../services/socketService');
 const { invalidateStatsCache } = require('../services/statsService');
 const logService = require('../services/logService');
+const { hasColumn } = require('../services/schemaService');
 const { extractIp, isIpAllowed } = require('../utils/ipValidator');
+const { normalizeDomain } = require('../utils/domainNormalizer');
 const logger = require('../utils/logger');
+
+function parseMaybeJson(value) {
+  if (!value) return null;
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeWebhookBody(body) {
+  if (body?.payload && typeof body.payload === 'object' && body.payload.id) {
+    return { wrapper: body, movementPayload: body.payload };
+  }
+  return { wrapper: body, movementPayload: body };
+}
 
 /**
  * Resolve auth from provider_sources (new) with fallback to hgcash_accounts.gateway_token (legacy).
@@ -46,20 +67,18 @@ async function resolveAuth(token, providerTokenHeader, ip) {
   return { providerSource: null, gatewayAccount };
 }
 
-function normalizePayload(body) {
-  if (body.payload && typeof body.payload === 'object' && body.payload.id) {
-    return {
-      movementPayload: body.payload,
-      providerEventId: body.provider_event_id || null,
-      receivedByProviderAt: body.received_by_provider_at || null,
-    };
-  }
-  return { movementPayload: body, providerEventId: null, receivedByProviderAt: null };
-}
-
 async function getMovementWithRelations(movementId) {
+  const hasDomainHostname = await hasColumn('domains', 'hostname');
   const [movements] = await pool.query(`
-    SELECT m.*, d.name AS domain_name, a.name AS account_name
+    SELECT m.*,
+      d.name AS domain_name,
+      ${hasDomainHostname ? 'd.hostname AS domain_hostname' : 'NULL AS domain_hostname'},
+      a.name AS account_name,
+      (SELECT COUNT(*) FROM webhook_deliveries wd WHERE wd.movement_id = m.id) AS delivery_count,
+      (SELECT GROUP_CONCAT(DISTINCT ${hasDomainHostname ? 'dom.hostname' : 'dom.base_url'} ORDER BY ${hasDomainHostname ? 'dom.hostname' : 'dom.base_url'} SEPARATOR ', ')
+         FROM webhook_deliveries wd
+         LEFT JOIN domains dom ON wd.domain_id = dom.id
+        WHERE wd.movement_id = m.id) AS delivery_domains
     FROM movements m
     LEFT JOIN domains d ON m.domain_id = d.id
     LEFT JOIN hgcash_accounts a ON m.hgcash_account_id = a.id
@@ -68,21 +87,234 @@ async function getMovementWithRelations(movementId) {
   return movements[0];
 }
 
-async function enqueueDelivery(movementId, domain) {
-  if (!domain?.id || !domain?.destination_webhook_url) return;
-
-  const [domainRows] = await pool.query(
-    'SELECT * FROM domains WHERE id = ? AND is_active = 1',
-    [domain.id]
+async function getExistingMovementByKeys(movementPayload, providerEventId) {
+  const [rows] = await pool.query(
+    `SELECT * FROM movements
+      WHERE hg_id = ?
+         OR (coelsa_code = ? AND coelsa_code IS NOT NULL)
+         OR (provider_event_id = ? AND provider_event_id IS NOT NULL)
+      LIMIT 1`,
+    [movementPayload.id || null, movementPayload.coelsaCode || null, providerEventId || null]
   );
-  if (!domainRows[0]) return;
+  return rows[0] || null;
+}
 
-  const deliveryId = await createDelivery(movementId, domainRows[0].id, domainRows[0].destination_webhook_url);
-  await webhookQueue.add('forward', { deliveryId, movementId }, {
-    attempts: 5,
-    backoff: { type: 'exponential', delay: 5000 },
-  });
-  logger.info(`Delivery ${deliveryId} queued for movement ${movementId}`);
+async function getExistingDomainsForMovement(movementId, fallbackDomainId = null) {
+  const hasDomainHostname = await hasColumn('domains', 'hostname');
+  const [rows] = await pool.query(
+    `SELECT DISTINCT d.*
+       FROM webhook_deliveries wd
+       INNER JOIN domains d ON wd.domain_id = d.id
+      WHERE wd.movement_id = ?
+      ORDER BY ${hasDomainHostname ? 'd.hostname ASC' : 'd.base_url ASC'}, d.id ASC`,
+    [movementId]
+  );
+
+  if (rows.length) return rows;
+
+  if (!fallbackDomainId) return [];
+
+  const [fallbackRows] = await pool.query(
+    'SELECT * FROM domains WHERE id = ? AND is_active = 1 LIMIT 1',
+    [fallbackDomainId]
+  );
+  return fallbackRows[0] ? [fallbackRows[0]] : [];
+}
+
+function buildStoredResolutionResult(existingMovement, domains) {
+  const destinationDomainsRaw = parseMaybeJson(existingMovement?.destination_domains_raw);
+  const resolutionStatus = existingMovement?.resolution_status
+    || (domains.length > 1 ? 'multi_resolved' : (domains.length === 1 ? 'resolved' : 'unresolved'));
+
+  return {
+    resolved: domains.length > 0 || existingMovement?.resolution_status === 'resolved' || existingMovement?.resolution_status === 'multi_resolved',
+    method: existingMovement?.resolution_method || 'none',
+    domains,
+    account: null,
+    resolutionStatus,
+    unresolvedReason: existingMovement?.unresolved_reason || null,
+    destinationDomainRaw: existingMovement?.destination_domain_raw || null,
+    destinationDomainsRaw,
+    diagnostics: {
+      rawDestinationDomains: [],
+      normalizedDestinationDomains: [],
+      invalidDestinationDomains: [],
+      missingDestinationDomains: [],
+      foundHostnames: domains.map(domain => domain.hostname || normalizeDomain(domain.base_url)).filter(Boolean),
+      partialMatch: false,
+    },
+    hasExplicitDestinationHints: false,
+  };
+}
+
+async function queueDeliveriesForMovement({ movementId, movement, resolveResult, providerSourceId, requestId, ip }) {
+  const createdDeliveries = [];
+  const skippedDomains = [];
+
+  if (resolveResult?.domains?.length) {
+    const { created, skipped } = await syncDeliveriesForMovement(movementId, resolveResult.domains);
+
+    for (const item of created) {
+      createdDeliveries.push(item.deliveryId);
+      await webhookQueue.add('forward', { deliveryId: item.deliveryId, movementId }, {
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 5000 },
+      });
+    }
+
+    if (skipped.length) {
+      skippedDomains.push(...skipped);
+      logService.info({
+        source: 'webhookController',
+        event_type: 'delivery_duplicate_skipped',
+        request_id: requestId,
+        gateway_event_id: movement.gateway_event_id,
+        provider_source_id: providerSourceId || null,
+        movement_id: movementId,
+        message: `Duplicate delivery skipped for movement ${movementId}`,
+        ip_address: ip,
+        metadata: {
+          domains: resolveResult.domains.map(d => ({
+            id: d.id,
+            hostname: d.hostname || normalizeDomain(d.base_url),
+            name: d.name,
+          })),
+          skipped_domain_ids: skipped,
+        },
+      });
+    }
+  }
+
+  return { createdDeliveries, skippedDomains };
+}
+
+function buildSocketMovementPayload(movement, resolveResult) {
+  const resolutionStatus = movement?.resolution_status || resolveResult?.resolutionStatus || 'unresolved';
+  const domainsCount = Array.isArray(resolveResult?.domains) ? resolveResult.domains.length : 0;
+
+  return {
+    ...movement,
+    resolution_status: resolutionStatus,
+    domains_count: domainsCount,
+    metadata: {
+      resolution_status: resolutionStatus,
+      domains_count: domainsCount,
+    },
+  };
+}
+
+function logDestinationResolution({ movement, resolveResult, providerSourceId, requestId, ip }) {
+  const metadata = {
+    raw_destination_domains: resolveResult?.diagnostics?.rawDestinationDomains || [],
+    normalized_destination_domains: resolveResult?.diagnostics?.normalizedDestinationDomains || [],
+    invalid_destination_domains: resolveResult?.diagnostics?.invalidDestinationDomains || [],
+    domains_found: resolveResult?.domains?.map(d => ({
+      id: d.id,
+      hostname: d.hostname || normalizeDomain(d.base_url),
+      name: d.name,
+    })) || [],
+    domains_missing: resolveResult?.diagnostics?.missingDestinationDomains || [],
+    movement_id: movement.id,
+    provider_event_id: movement.provider_event_id,
+    gateway_event_id: movement.gateway_event_id,
+  };
+
+  if (resolveResult?.hasExplicitDestinationHints) {
+    if (resolveResult.diagnostics?.invalidDestinationDomains?.length) {
+      logService.warn({
+        source: 'webhookController',
+        event_type: 'invalid_destination_domain',
+        request_id: requestId,
+        gateway_event_id: movement.gateway_event_id,
+        provider_source_id: providerSourceId || null,
+        movement_id: movement.id,
+        message: 'Invalid destination domain received',
+        ip_address: ip,
+        metadata,
+      });
+    }
+
+    if (!resolveResult.resolved) {
+      logService.warn({
+        source: 'webhookController',
+        event_type: 'destination_domain_not_found',
+        request_id: requestId,
+        gateway_event_id: movement.gateway_event_id,
+        provider_source_id: providerSourceId || null,
+        movement_id: movement.id,
+        message: resolveResult.unresolvedReason || 'Destination domain not found',
+        ip_address: ip,
+        metadata,
+      });
+      return;
+    }
+
+    if (resolveResult.diagnostics?.partialMatch) {
+      logService.warn({
+        source: 'webhookController',
+        event_type: 'destination_domains_partial_match',
+        request_id: requestId,
+        gateway_event_id: movement.gateway_event_id,
+        provider_source_id: providerSourceId || null,
+        movement_id: movement.id,
+        message: 'Partial destination domains match',
+        ip_address: ip,
+        metadata,
+      });
+    }
+
+    if (resolveResult.resolutionStatus === 'multi_resolved') {
+      logService.info({
+        source: 'webhookController',
+        event_type: 'multi_destination_resolved',
+        request_id: requestId,
+        gateway_event_id: movement.gateway_event_id,
+        provider_source_id: providerSourceId || null,
+        movement_id: movement.id,
+        message: `Movement resolved to ${resolveResult.domains.length} destinations`,
+        ip_address: ip,
+        metadata,
+      });
+    }
+  }
+}
+
+async function processPersistedMovement({ movementId, providerSourceId, requestId, ip, resolved, movementPayload, resolveResult, socketEvent }) {
+  let movement = await getMovementWithRelations(movementId);
+  await invalidateStatsCache();
+
+  if (resolved) {
+    await queueDeliveriesForMovement({
+      movementId,
+      movement,
+      resolveResult,
+      providerSourceId,
+      requestId,
+      ip,
+    });
+    movement = await getMovementWithRelations(movementId);
+    socketService.emit(socketEvent, buildSocketMovementPayload(movement, resolveResult));
+    logDestinationResolution({ movement, resolveResult, providerSourceId, requestId, ip });
+  } else {
+    socketService.emit('movement:unresolved', movement);
+    logService.warn({
+      source: 'webhookController',
+      event_type: 'movement_unresolved',
+      request_id: requestId,
+      gateway_event_id: movement.gateway_event_id,
+      provider_source_id: providerSourceId || null,
+      movement_id: movementId,
+      message: resolveResult.unresolvedReason || 'Movement unresolved',
+      ip_address: ip,
+      metadata: {
+        accountId: movementPayload.accountId,
+        destination_domain_raw: resolveResult.destinationDomainRaw || null,
+        destination_domains_raw: resolveResult.destinationDomainsRaw || null,
+      },
+    });
+  }
+
+  return movement;
 }
 
 async function receiveWebhook(req, res, next) {
@@ -97,7 +329,9 @@ async function receiveWebhook(req, res, next) {
       return res.status(400).json({ success: false, message: 'Invalid payload' });
     }
 
-    const { movementPayload, providerEventId } = normalizePayload(body);
+    const { wrapper, movementPayload } = normalizeWebhookBody(body);
+    const providerEventId = wrapper.provider_event_id || movementPayload.provider_event_id || null;
+    const receivedByProviderAt = wrapper.received_by_provider_at || movementPayload.received_by_provider_at || null;
 
     if (!movementPayload.id) {
       return res.status(400).json({ success: false, message: 'Payload id is required' });
@@ -118,7 +352,7 @@ async function receiveWebhook(req, res, next) {
     }
 
     const gatewayEventId = uuidv4();
-    const resolveResult = await resolveAccountForMovement(movementPayload);
+    const resolveResult = await resolveDestinationsForWebhook({ wrapper, movementPayload, allowAccountFallback: true });
 
     const { duplicate, id: movementId, gatewayEventId: dupGatewayEventId } = await saveMovement(
       movementPayload,
@@ -128,6 +362,10 @@ async function receiveWebhook(req, res, next) {
         gatewayEventId,
         token,
         providerSourceId: providerSource?.id || null,
+        receivedByProviderAt,
+        rawPayload: body,
+        destinationDomainRaw: resolveResult.destinationDomainRaw,
+        destinationDomainsRaw: resolveResult.destinationDomainsRaw,
       }
     );
 
@@ -155,35 +393,18 @@ async function receiveWebhook(req, res, next) {
 
     setImmediate(async () => {
       try {
-        const movement = await getMovementWithRelations(movementId);
-        await invalidateStatsCache();
-
-        if (resolveResult.resolved) {
-          socketService.emit('movement:new', movement);
-          await enqueueDelivery(movementId, resolveResult.domain);
-          logService.info({
-            source: 'webhookController',
-            event_type: 'movement_received',
-            request_id: req.requestId,
-            gateway_event_id: gatewayEventId,
-            provider_source_id: providerSource?.id,
-            movement_id: movementId,
-            message: `Movement received and resolved via ${resolveResult.method}`,
-            ip_address: ip,
-          });
-        } else {
-          socketService.emit('movement:unresolved', movement);
-          logService.warn({
-            source: 'webhookController',
-            event_type: 'movement_unresolved',
-            request_id: req.requestId,
-            gateway_event_id: gatewayEventId,
-            provider_source_id: providerSource?.id,
-            movement_id: movementId,
-            message: resolveResult.reason,
-            ip_address: ip,
-            metadata: { accountId: movementPayload.accountId },
-          });
+        await processPersistedMovement({
+          movementId,
+          providerSourceId: providerSource?.id,
+          requestId: req.requestId,
+          ip,
+          resolved: resolveResult.resolved,
+          movementPayload,
+          resolveResult,
+          socketEvent: 'movement:new',
+        });
+        if (gatewayAccount) {
+          logger.info(`Legacy gateway account used for webhook ${gatewayAccount.id}`);
         }
       } catch (err) {
         logger.error('Error processing webhook async:', err);
@@ -214,7 +435,9 @@ async function receiveWebhookUpdate(req, res, next) {
       return res.status(400).json({ success: false, message: 'Invalid payload' });
     }
 
-    const { movementPayload, providerEventId } = normalizePayload(body);
+    const { wrapper, movementPayload } = normalizeWebhookBody(body);
+    const providerEventId = wrapper.provider_event_id || movementPayload.provider_event_id || null;
+    const receivedByProviderAt = wrapper.received_by_provider_at || movementPayload.received_by_provider_at || null;
 
     if (!movementPayload.id && !movementPayload.coelsaCode) {
       return res.status(400).json({ success: false, message: 'Payload id or coelsaCode is required' });
@@ -223,25 +446,84 @@ async function receiveWebhookUpdate(req, res, next) {
     const { providerSource, error } = await resolveAuth(token, providerTokenHeader, ip);
     if (error) return res.status(error.status).json(error.body);
 
-    const resolveResult = await resolveAccountForMovement(movementPayload);
-    const { id: movementId } = await updateMovement(movementPayload, resolveResult, {
-      providerEventId,
-      token,
-      providerSourceId: providerSource?.id || null,
-    });
+    const existingMovement = await getExistingMovementByKeys(movementPayload, providerEventId);
+    const hints = collectDestinationHints(wrapper, movementPayload);
+    let resolveResult;
 
-    res.status(200).json({ success: true, message: 'Webhook update received' });
+    if (hints.hasExplicitDestinationHints) {
+      resolveResult = await resolveDestinationsForWebhook({ wrapper, movementPayload, allowAccountFallback: true });
+    } else if (existingMovement) {
+      const existingDomains = await getExistingDomainsForMovement(existingMovement.id, existingMovement.domain_id);
+      resolveResult = buildStoredResolutionResult(existingMovement, existingDomains);
+    } else {
+      resolveResult = await resolveDestinationsForWebhook({ wrapper, movementPayload, allowAccountFallback: true });
+    }
+
+    const saveResult = existingMovement
+      ? await updateMovement(movementPayload, resolveResult, {
+        providerEventId,
+        token,
+        providerSourceId: providerSource?.id || null,
+        receivedByProviderAt,
+        rawPayload: body,
+        destinationDomainRaw: resolveResult.destinationDomainRaw,
+        destinationDomainsRaw: resolveResult.destinationDomainsRaw,
+        preserveResolution: !hints.hasExplicitDestinationHints && !!existingMovement,
+      })
+      : await saveMovement(movementPayload, resolveResult, {
+        providerEventId,
+        token,
+        providerSourceId: providerSource?.id || null,
+        receivedByProviderAt,
+        rawPayload: body,
+        destinationDomainRaw: resolveResult.destinationDomainRaw,
+        destinationDomainsRaw: resolveResult.destinationDomainsRaw,
+      });
+
+    const movementId = saveResult.id;
+
+    res.status(200).json({ success: true, message: 'Webhook update received', gateway_event_id: providerEventId || null });
 
     setImmediate(async () => {
       try {
-        const movement = await getMovementWithRelations(movementId);
-        socketService.emit('movement:updated', movement);
-        await invalidateStatsCache();
-        if (resolveResult.resolved) {
-          await enqueueDelivery(movementId, resolveResult.domain);
+        const movement = await processPersistedMovement({
+          movementId,
+          providerSourceId: providerSource?.id,
+          requestId: req.requestId,
+          ip,
+          resolved: resolveResult.resolved,
+          movementPayload,
+          resolveResult,
+          socketEvent: 'movement:updated',
+        });
+
+        if (movement) {
+          logService.info({
+            source: 'webhookController',
+            event_type: 'movement_updated',
+            request_id: req.requestId,
+            gateway_event_id: movement.gateway_event_id,
+            provider_source_id: providerSource?.id || null,
+            movement_id: movementId,
+            message: `Movement updated with resolution ${resolveResult.resolutionStatus}`,
+            ip_address: ip,
+            metadata: {
+              destination_domain_raw: resolveResult.destinationDomainRaw || null,
+              destination_domains_raw: resolveResult.destinationDomainsRaw || null,
+              resolution_method: resolveResult.method,
+            },
+          });
         }
       } catch (err) {
         logger.error('Error processing webhook update async:', err);
+        logService.error({
+          source: 'webhookController',
+          event_type: 'webhook_processing_error',
+          request_id: req.requestId,
+          gateway_event_id: providerEventId || null,
+          message: err.message,
+          ip_address: ip,
+        });
       }
     });
   } catch (err) {

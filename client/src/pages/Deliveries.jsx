@@ -3,6 +3,7 @@ import {
   Box, Card, Typography, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, TablePagination, IconButton, Tooltip, FormControl, InputLabel,
   Select, MenuItem, Grid, Button, Skeleton, CardContent, useMediaQuery, useTheme,
+  Stack,
 } from '@mui/material';
 import { Refresh, RestoreFromTrash, CheckCircleOutlined, CancelOutlined, Send } from '@mui/icons-material';
 import api from '../lib/api';
@@ -14,6 +15,7 @@ function formatDate(d) {
   if (!d) return '—';
   return new Date(d).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' });
 }
+
 function formatAmount(n) {
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 0 }).format(n || 0);
 }
@@ -72,7 +74,6 @@ export default function Deliveries() {
 
   return (
     <Box>
-      {/* Page Header */}
       <Box sx={{ mb: 3 }}>
         <Typography variant="h5" fontWeight={700}>Entregas</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
@@ -84,7 +85,6 @@ export default function Deliveries() {
         }} />
       </Box>
 
-      {/* Filters */}
       <Card sx={{ mb: 2 }}>
         <CardContent sx={{ p: { xs: 1.5, sm: 2 }, '&:last-child': { pb: { xs: 1.5, sm: 2 } } }}>
           <Grid container spacing={1.5} alignItems="center">
@@ -114,7 +114,6 @@ export default function Deliveries() {
         </CardContent>
       </Card>
 
-      {/* Table */}
       <Card>
         <TableContainer sx={{ overflowX: 'auto' }}>
           <Table size="small" sx={{ minWidth: 480 }}>
@@ -161,7 +160,16 @@ export default function Deliveries() {
               ) : rows.map(row => (
                 <TableRow key={row.id} hover sx={row.status === 'dead' ? { bgcolor: 'rgba(71,85,105,0.05)' } : {}}>
                   <TableCell><StatusChip status={row.status} /></TableCell>
-                  <TableCell sx={{ fontSize: 12, ...hideSm }}>{row.domain_name || '—'}</TableCell>
+                  <TableCell sx={{ fontSize: 12, ...hideSm }}>
+                    <Stack spacing={0.25}>
+                      <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
+                        {row.domain_hostname || '—'}
+                      </Typography>
+                      <Typography variant="body2" fontWeight={600}>
+                        {row.domain_name || '—'}
+                      </Typography>
+                    </Stack>
+                  </TableCell>
                   <TableCell sx={{ fontSize: 11, fontFamily: 'monospace', ...hideMd }}>
                     {row.hg_id?.substring(0, 12) || '—'}…
                   </TableCell>

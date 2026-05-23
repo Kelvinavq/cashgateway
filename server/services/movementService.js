@@ -1,10 +1,33 @@
 const { pool } = require('../config/database');
 const logger = require('../utils/logger');
 
+function toDate(value, fallback = null) {
+  if (!value) return fallback;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? fallback : d;
+}
+
+function getResolutionSnapshot(resolveResult = {}, fallbackAccount = null) {
+  const hasResolvedDomains = Array.isArray(resolveResult.domains) && resolveResult.domains.length > 0;
+  const primaryDomain = hasResolvedDomains ? resolveResult.domains[0] : null;
+  const resolved = !!resolveResult.resolved;
+  const method = resolveResult.method || 'none';
+
+  return {
+    resolved,
+    method,
+    resolutionStatus: resolveResult.resolutionStatus || (resolved ? 'resolved' : 'unresolved'),
+    domains: resolveResult.domains || [],
+    account: resolveResult.account || fallbackAccount || null,
+    reason: resolveResult.unresolvedReason || resolveResult.reason || null,
+    primaryDomain,
+  };
+}
+
 /**
  * @param {object} movementPayload  - Normalized HG.Cash movement fields
- * @param {object} resolveResult    - Result from resolveAccountForMovement
- * @param {object} meta             - { providerEventId, gatewayEventId, token }
+ * @param {object} resolveResult    - Result from resolveDestinationsForWebhook / manual resolution
+ * @param {object} meta             - Extra metadata from controller
  */
 async function saveMovement(movementPayload, resolveResult, meta = {}) {
   const {
@@ -27,12 +50,24 @@ async function saveMovement(movementPayload, resolveResult, meta = {}) {
     accountId,
   } = movementPayload;
 
-  const { providerEventId = null, gatewayEventId, token = null, providerSourceId = null } = meta;
-  const { resolved, method, account, reason } = resolveResult;
+  const {
+    providerEventId = null,
+    gatewayEventId,
+    token = null,
+    providerSourceId = null,
+    receivedByProviderAt = null,
+    rawPayload = null,
+    destinationDomainRaw = null,
+    destinationDomainsRaw = null,
+  } = meta;
 
+  const snapshot = getResolutionSnapshot(resolveResult);
+  const { resolved, method, account, reason, domains, resolutionStatus, primaryDomain } = snapshot;
   const now = new Date();
+  const movementDate = toDate(date, now);
+  const receivedAt = toDate(receivedByProviderAt, now);
+  const destinationDomainId = primaryDomain?.id || (resolved && account ? account.domain_id : null);
 
-  // Dedup by hg_id (primary) or provider_event_id (secondary, when provided)
   const [existing] = await pool.query(
     'SELECT id, gateway_event_id FROM movements WHERE hg_id = ? LIMIT 1',
     [hg_id]
@@ -60,6 +95,7 @@ async function saveMovement(movementPayload, resolveResult, meta = {}) {
        amount, currency, direction, status, type,
        movement_date, timezone, from_name, to_name,
        from_cbu, to_cbu, from_cuit, to_cuit, coelsa_code,
+       destination_domain_raw, destination_domains_raw,
        resolution_status, resolution_method, unresolved_reason,
        provider_token_id, received_from_provider_at, raw_payload, received_at,
        created_at, updated_at)
@@ -69,6 +105,7 @@ async function saveMovement(movementPayload, resolveResult, meta = {}) {
        ?, ?, ?, ?, ?,
        ?, ?, ?, ?,
        ?, ?, ?, ?, ?,
+       ?, ?,
        ?, ?, ?,
        ?, ?, ?, ?,
        NOW(), NOW())`,
@@ -80,13 +117,13 @@ async function saveMovement(movementPayload, resolveResult, meta = {}) {
       externalID || null,
       accountId || null,
       resolved && account ? account.id : null,
-      resolved && account ? account.domain_id : null,
+      destinationDomainId,
       parseFloat(amount) || 0,
       currency || 'ARS',
       direction || 'Inbound',
       status || 'done',
       type || 'inbound',
-      date ? new Date(date) : now,
+      movementDate,
       timezone || null,
       fromName || null,
       toName || null,
@@ -95,17 +132,19 @@ async function saveMovement(movementPayload, resolveResult, meta = {}) {
       fromCUIT || null,
       toCUIT || null,
       coelsaCode || null,
-      resolved ? 'resolved' : 'unresolved',
+      destinationDomainRaw || null,
+      destinationDomainsRaw ? JSON.stringify(destinationDomainsRaw) : null,
+      resolutionStatus,
       method || 'none',
       resolved ? null : (reason || null),
       token || null,
-      now,
-      JSON.stringify(movementPayload),
+      receivedAt,
+      JSON.stringify(rawPayload || movementPayload),
       now,
     ]
   );
 
-  logger.info(`Movement saved: id=${result.insertId}, hg_id=${hg_id}, resolution=${resolved ? 'resolved' : 'unresolved'}`);
+  logger.info(`Movement saved: id=${result.insertId}, hg_id=${hg_id}, resolution=${resolutionStatus}`);
   return { duplicate: false, id: result.insertId };
 }
 
@@ -130,12 +169,22 @@ async function updateMovement(movementPayload, resolveResult, meta = {}) {
     accountId,
   } = movementPayload;
 
-  const { token = null } = meta;
-  const { resolved, method, account } = resolveResult;
+  const {
+    token = null,
+    providerEventId = null,
+    providerSourceId = null,
+    receivedByProviderAt = null,
+    rawPayload = null,
+    destinationDomainRaw = null,
+    destinationDomainsRaw = null,
+    preserveResolution = false,
+  } = meta;
 
+  const snapshot = getResolutionSnapshot(resolveResult);
+  const { resolved, method, account, reason, domains, resolutionStatus, primaryDomain } = snapshot;
   const [existing] = await pool.query(
-    'SELECT id, resolution_status FROM movements WHERE hg_id = ? OR (coelsa_code = ? AND coelsa_code IS NOT NULL) LIMIT 1',
-    [hg_id || null, coelsaCode || null]
+    'SELECT id, resolution_status, resolution_method, domain_id FROM movements WHERE hg_id = ? OR (coelsa_code = ? AND coelsa_code IS NOT NULL) OR (provider_event_id = ? AND provider_event_id IS NOT NULL) LIMIT 1',
+    [hg_id || null, coelsaCode || null, providerEventId || null]
   );
 
   if (!existing[0]) {
@@ -144,49 +193,71 @@ async function updateMovement(movementPayload, resolveResult, meta = {}) {
 
   const movementId = existing[0].id;
   const currentStatus = existing[0].resolution_status;
+  const currentMethod = existing[0].resolution_method;
+  const currentDomainId = existing[0].domain_id;
+  const nextMovementDate = date ? toDate(date, null) : null;
+  const nextReceivedAt = receivedByProviderAt ? toDate(receivedByProviderAt, null) : null;
 
-  // Only update resolution if previously unresolved and now can be resolved
-  const newResolutionStatus = (currentStatus === 'unresolved' && resolved) ? 'resolved' : currentStatus;
-  const newResolutionMethod = (currentStatus === 'unresolved' && resolved) ? method : null;
+  const resolutionColumns = preserveResolution
+    ? {
+        domainId: currentDomainId,
+        resolutionStatus: currentStatus,
+        resolutionMethod: currentMethod,
+        unresolvedReason: reason || null,
+        destinationDomainRaw: resolveResult.destinationDomainRaw || null,
+        destinationDomainsRaw: resolveResult.destinationDomainsRaw || null,
+      }
+    : {
+        domainId: (resolved && account ? account.domain_id : (primaryDomain?.id || null)),
+        resolutionStatus,
+        resolutionMethod: method || 'none',
+        unresolvedReason: resolved ? null : (reason || null),
+        destinationDomainRaw,
+        destinationDomainsRaw,
+      };
 
   await pool.query(
     `UPDATE movements SET
-      external_id          = COALESCE(?, external_id),
-      account_id           = COALESCE(?, account_id),
-      hgcash_account_id    = COALESCE(?, hgcash_account_id),
-      domain_id            = COALESCE(?, domain_id),
-      amount               = COALESCE(?, amount),
-      currency             = COALESCE(?, currency),
-      direction            = COALESCE(?, direction),
-      status               = COALESCE(?, status),
-      type                 = COALESCE(?, type),
-      movement_date        = COALESCE(?, movement_date),
-      timezone             = COALESCE(?, timezone),
-      from_name            = COALESCE(?, from_name),
-      to_name              = COALESCE(?, to_name),
-      from_cbu             = COALESCE(?, from_cbu),
-      to_cbu               = COALESCE(?, to_cbu),
-      from_cuit            = COALESCE(?, from_cuit),
-      to_cuit              = COALESCE(?, to_cuit),
-      coelsa_code          = COALESCE(?, coelsa_code),
-      resolution_status    = ?,
-      resolution_method    = COALESCE(?, resolution_method),
-      unresolved_reason    = IF(? = 'resolved', NULL, unresolved_reason),
-      provider_token_id    = COALESCE(?, provider_token_id),
-      raw_payload          = ?,
-      updated_at           = NOW()
+      external_id               = COALESCE(?, external_id),
+      account_id                = COALESCE(?, account_id),
+      hgcash_account_id         = COALESCE(?, hgcash_account_id),
+      domain_id                 = ?,
+      amount                    = COALESCE(?, amount),
+      currency                  = COALESCE(?, currency),
+      direction                 = COALESCE(?, direction),
+      status                    = COALESCE(?, status),
+      type                      = COALESCE(?, type),
+      movement_date             = COALESCE(?, movement_date),
+      timezone                  = COALESCE(?, timezone),
+      from_name                 = COALESCE(?, from_name),
+      to_name                   = COALESCE(?, to_name),
+      from_cbu                  = COALESCE(?, from_cbu),
+      to_cbu                    = COALESCE(?, to_cbu),
+      from_cuit                 = COALESCE(?, from_cuit),
+      to_cuit                   = COALESCE(?, to_cuit),
+      coelsa_code               = COALESCE(?, coelsa_code),
+      destination_domain_raw    = ?,
+      destination_domains_raw    = ?,
+      resolution_status         = ?,
+      resolution_method         = ?,
+      unresolved_reason         = ?,
+      provider_token_id         = COALESCE(?, provider_token_id),
+      provider_source_id        = COALESCE(?, provider_source_id),
+      received_from_provider_at  = COALESCE(?, received_from_provider_at),
+      raw_payload               = ?,
+      updated_at                = NOW()
      WHERE id = ?`,
     [
       externalID || null,
       accountId || null,
       resolved && account ? account.id : null,
-      resolved && account ? account.domain_id : null,
+      resolutionColumns.domainId,
       amount !== undefined && amount !== null ? parseFloat(amount) || 0 : null,
       currency || null,
       direction || null,
       status || null,
       type || null,
-      date ? new Date(date) : null,
+      nextMovementDate,
       timezone || null,
       fromName || null,
       toName || null,
@@ -195,25 +266,68 @@ async function updateMovement(movementPayload, resolveResult, meta = {}) {
       fromCUIT || null,
       toCUIT || null,
       coelsaCode || null,
-      newResolutionStatus,
-      newResolutionMethod,
-      newResolutionStatus,
+      resolutionColumns.destinationDomainRaw || null,
+      resolutionColumns.destinationDomainsRaw ? JSON.stringify(resolutionColumns.destinationDomainsRaw) : null,
+      resolutionColumns.resolutionStatus,
+      resolutionColumns.resolutionMethod,
+      resolutionColumns.unresolvedReason,
       token || null,
-      JSON.stringify(movementPayload),
+      providerSourceId || null,
+      nextReceivedAt,
+      JSON.stringify(rawPayload || movementPayload),
       movementId,
     ]
   );
 
-  logger.info(`Movement updated: id=${movementId}, resolution=${newResolutionStatus}`);
+  logger.info(`Movement updated: id=${movementId}, resolution=${resolutionColumns.resolutionStatus}`);
   return { duplicate: false, id: movementId, updated: true };
 }
 
 async function createDelivery(movementId, domainId, destinationUrl) {
   const [result] = await pool.query(
-    "INSERT INTO webhook_deliveries (movement_id, domain_id, destination_url, status, attempts) VALUES (?, ?, ?, 'pending', 0)",
+    `INSERT IGNORE INTO webhook_deliveries
+      (movement_id, domain_id, destination_url, status, attempts)
+     VALUES (?, ?, ?, 'pending', 0)`,
     [movementId, domainId, destinationUrl]
   );
-  return result.insertId;
+
+  if (!result.affectedRows) {
+    return { created: false, insertId: null };
+  }
+
+  return { created: true, insertId: result.insertId };
 }
 
-module.exports = { saveMovement, updateMovement, createDelivery };
+async function syncDeliveriesForMovement(movementId, domains = []) {
+  const uniqueDomains = [];
+  const seen = new Set();
+
+  for (const domain of domains) {
+    if (!domain?.id || !domain?.destination_webhook_url) continue;
+    const key = String(domain.id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueDomains.push(domain);
+  }
+
+  const created = [];
+  const skipped = [];
+
+  for (const domain of uniqueDomains) {
+    const result = await createDelivery(movementId, domain.id, domain.destination_webhook_url);
+    if (result.created) {
+      created.push({ domainId: domain.id, deliveryId: result.insertId });
+    } else {
+      skipped.push(domain.id);
+    }
+  }
+
+  return { created, skipped };
+}
+
+module.exports = {
+  saveMovement,
+  updateMovement,
+  createDelivery,
+  syncDeliveriesForMovement,
+};

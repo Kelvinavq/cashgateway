@@ -1,4 +1,5 @@
 const { body, param, query } = require('express-validator');
+const { normalizeDomain } = require('./domainNormalizer');
 
 const loginValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
@@ -18,6 +19,14 @@ const domainValidation = [
   body('slug').trim().matches(/^[a-z0-9-]+$/).withMessage('Slug: lowercase letters, numbers, hyphens only'),
   body('base_url').isURL().withMessage('Valid base_url required'),
   body('destination_webhook_url').isURL().withMessage('Valid destination_webhook_url required'),
+  body('hostname')
+    .optional({ nullable: true, checkFalsy: true })
+    .custom((value) => {
+      if (!normalizeDomain(value)) {
+        throw new Error('Valid hostname required');
+      }
+      return true;
+    }),
 ];
 
 module.exports = { loginValidation, accountValidation, domainValidation };

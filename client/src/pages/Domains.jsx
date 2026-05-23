@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+﻿import { useState, useEffect, useCallback } from 'react';
 import {
   Box, Card, Typography, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, IconButton, Tooltip, Button, Dialog, DialogTitle, DialogContent,
@@ -11,8 +11,22 @@ import api from '../lib/api';
 import StatusChip from '../components/StatusChip';
 import toast from 'react-hot-toast';
 
+function guessHostname(value) {
+  if (!value) return '';
+  try {
+    const input = String(value).trim();
+    if (!input) return '';
+    const url = input.includes('://') ? new URL(input) : new URL(`https://${input}`);
+    let host = url.hostname.toLowerCase();
+    if (host.startsWith('www.')) host = host.slice(4);
+    return host;
+  } catch {
+    return '';
+  }
+}
+
 const EMPTY = {
-  name: '', slug: '', base_url: '', destination_webhook_url: '', destination_token: '',
+  name: '', slug: '', base_url: '', hostname: '', destination_webhook_url: '', destination_token: '',
   require_ack: false, is_active: true,
 };
 
@@ -46,6 +60,7 @@ export default function Domains() {
   const openEdit = (row) => {
     setForm({
       name: row.name, slug: row.slug, base_url: row.base_url,
+      hostname: row.hostname || '',
       destination_webhook_url: row.destination_webhook_url || '',
       destination_token: row.destination_token || '',
       require_ack: !!row.require_ack,
@@ -59,7 +74,12 @@ export default function Domains() {
     setSaving(true);
     try {
       const { _signing_secret_masked, ...rest } = form;
-      const payload = { ...rest, is_active: form.is_active ? 1 : 0, require_ack: form.require_ack ? 1 : 0 };
+      const payload = {
+        ...rest,
+        hostname: form.hostname || guessHostname(form.base_url),
+        is_active: form.is_active ? 1 : 0,
+        require_ack: form.require_ack ? 1 : 0,
+      };
       if (dialog === 'create') {
         const { data } = await api.post('/domains', payload);
         if (data.data?.gateway_signing_secret) {
@@ -105,6 +125,16 @@ export default function Domains() {
   const field = (k) => ({
     value: form[k] ?? '', onChange: e => setForm(p => ({ ...p, [k]: e.target.value })),
   });
+  const handleBaseUrlChange = (value) => {
+    setForm(prev => ({
+      ...prev,
+      base_url: value,
+      hostname: prev.hostname || guessHostname(value),
+    }));
+  };
+  const handleHostnameChange = (value) => {
+    setForm(prev => ({ ...prev, hostname: value }));
+  };
   const copy = (text) => { navigator.clipboard.writeText(text); toast.success('Copiado'); };
 
   const hideSm = { display: { xs: 'none', sm: 'table-cell' } };
@@ -149,6 +179,7 @@ export default function Domains() {
             <TableHead>
               <TableRow>
                 <TableCell>Nombre</TableCell>
+                <TableCell sx={hideSm}>Hostname</TableCell>
                 <TableCell sx={hideSm}>Slug</TableCell>
                 <TableCell sx={hideMd}>Base URL</TableCell>
                 <TableCell sx={hideSm}>Webhook Destino</TableCell>
@@ -162,12 +193,12 @@ export default function Domains() {
               {loading ? (
                 [...Array(3)].map((_, i) => (
                   <TableRow key={i}>
-                    {[...Array(8)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
+                    {[...Array(9)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
                   </TableRow>
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8}>
+                  <TableCell colSpan={9}>
                     <Box sx={{ py: 6, textAlign: 'center' }}>
                       <Box sx={{
                         width: 52, height: 52, borderRadius: '14px',
@@ -195,6 +226,17 @@ export default function Domains() {
                       px: 0.5, borderRadius: 0.5, display: { sm: 'none' },
                     }}>
                       {row.slug}
+                    </Typography>
+                  </TableCell>
+                  <TableCell sx={hideSm}>
+                    <Typography variant="caption" sx={{
+                      fontFamily: 'monospace',
+                      bgcolor: 'rgba(99,102,241,0.08)',
+                      color: 'primary.light',
+                      px: 1, py: 0.5, borderRadius: 1,
+                      border: '1px solid rgba(99,102,241,0.15)',
+                    }}>
+                      {row.hostname || '—'}
                     </Typography>
                   </TableCell>
                   <TableCell sx={hideSm}>
@@ -272,8 +314,16 @@ export default function Domains() {
               />
             </Grid>
             <Grid item xs={12}>
-              <TextField label="Base URL" fullWidth size="small" required {...field('base_url')}
+              <TextField label="Base URL" fullWidth size="small" required value={form.base_url || ''} onChange={e => handleBaseUrlChange(e.target.value)}
                 placeholder="https://miapp.com" />
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                label="Hostname" fullWidth size="small"
+                value={form.hostname || ''}
+                onChange={e => handleHostnameChange(e.target.value)}
+                helperText="Se autogenera desde la Base URL si lo dejás vacío"
+              />
             </Grid>
             <Grid item xs={12}>
               <TextField

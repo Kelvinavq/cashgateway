@@ -8,7 +8,7 @@ import {
   TrendingUp, TrendingDown, CheckCircle, ReportProblemOutlined,
   HourglassEmpty, AttachMoney, SwapHoriz, TaskAlt, WarningAmber, BuildCircle,
   Source, MailOutlined, GppMaybe, SpeedOutlined, RotateRight,
-  ErrorOutlined, Block,
+  ErrorOutlined, Block, Send,
 } from '@mui/icons-material';
 import api from '../lib/api';
 import { useSocket } from '../hooks/useSocket';
@@ -146,6 +146,14 @@ export default function Dashboard() {
     { label: 'Resuelto manual',  value: s?.movements.manually_resolved, Icon: BuildCircle,  colorKey: 'violet' },
   ];
 
+  const destinoKpis = [
+    { label: 'Por dominio',         value: s?.movements.destination_domain_resolved, Icon: Source,      colorKey: 'cyan'   },
+    { label: 'Multi destino',       value: s?.movements.multi_destination,          Icon: SwapHoriz,   colorKey: 'indigo' },
+    { label: 'Dominios inválidos',  value: s?.security.invalid_destination_domains, Icon: WarningAmber,colorKey: 'amber'  },
+    { label: 'Deliveries multi',    value: s?.deliveries.multi_destination,         Icon: Send,        colorKey: 'green'  },
+    { label: 'Unresolved inválido', value: s?.movements.unresolved_invalid_domain,  Icon: GppMaybe,    colorKey: 'red'    },
+  ];
+
   const entregasKpis = [
     { label: 'Entregas OK',  value: s?.deliveries.success, Icon: CheckCircle,           colorKey: 'emerald' },
     { label: 'Fallidas',     value: s?.deliveries.failed,  Icon: ReportProblemOutlined, colorKey: 'red'     },
@@ -211,11 +219,20 @@ export default function Dashboard() {
         </Grid>
       </Grid>
 
+      <SectionLabel label="Destino" accentColor="#06b6d4" />
+      <Grid container spacing={{ xs: 1, sm: 1.5 }} sx={{ mb: 2.5 }}>
+        {destinoKpis.map(k => (
+          <Grid key={k.label} item xs={6} sm={4} md={3}>
+            <StatCard {...k} loading={loading} accent />
+          </Grid>
+        ))}
+      </Grid>
+
       {/* ── Seguridad & Enterprise ── */}
       <SectionLabel label="Seguridad & Enterprise" accentColor="#f59e0b" />
       <Grid container spacing={{ xs: 1, sm: 1.5 }} sx={{ mb: 3 }}>
         {seguridadKpis.map(k => (
-          <Grid key={k.label} item xs={6} sm={4} md={3} lg={12 / 7}>
+          <Grid key={k.label} item xs={6} sm={4} md={3} lg={3}>
             <StatCard {...k} loading={loading} />
           </Grid>
         ))}

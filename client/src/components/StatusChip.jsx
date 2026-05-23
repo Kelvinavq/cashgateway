@@ -1,4 +1,5 @@
 import { Box } from '@mui/material';
+import { RESOLUTION_STATUS_CONFIG } from '../../../shared/resolutionStatus.mjs';
 
 const cfg = {
   success:           { label: 'Entregado',       bg: 'rgba(16,185,129,0.12)',  color: '#10b981', pulse: false },
@@ -10,10 +11,8 @@ const cfg = {
   Outbound:          { label: 'Salida',           bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b', pulse: false },
   active:            { label: 'Activo',           bg: 'rgba(16,185,129,0.12)',  color: '#10b981', pulse: false },
   inactive:          { label: 'Inactivo',         bg: 'rgba(100,116,139,0.12)', color: '#64748b', pulse: false },
-  resolved:          { label: 'Resuelto',         bg: 'rgba(20,184,166,0.12)',  color: '#14b8a6', pulse: false },
-  unresolved:        { label: 'No resuelto',      bg: 'rgba(239,68,68,0.12)',   color: '#ef4444', pulse: false },
-  manually_resolved: { label: 'Resuelto manual',  bg: 'rgba(139,92,246,0.12)',  color: '#8b5cf6', pulse: false },
   dead:              { label: 'Dead Letter',       bg: 'rgba(30,41,59,0.25)',    color: '#475569', pulse: false },
+  ...RESOLUTION_STATUS_CONFIG,
 };
 
 export default function StatusChip({ status }) {

@@ -1,4 +1,4 @@
-# HG.Cash Webhook Gateway
+﻿# HG.Cash Webhook Gateway
 
 Gateway centralizado para recibir, procesar y reenviar webhooks de HG.Cash desde proveedores externos hacia múltiples dominios/proyectos.
 
@@ -13,7 +13,7 @@ Proveedor Externo → [Este Gateway] → Dominio/Proyecto Final
    HMAC signing
 ```
 
-El proveedor externo reenvía los webhooks de todas las cuentas HG.Cash a este gateway. El gateway autentica al proveedor por token (con verificación de IP), identifica la cuenta por `accountId` (con fallback por CBU y CUIT), registra el movimiento y reenvía al dominio correspondiente firmando el payload con HMAC. Los movimientos no resueltos quedan pendientes de asignación manual.
+El proveedor externo reenvía los webhooks de todas las cuentas HG.Cash a este gateway. El gateway autentica al proveedor por token (con verificación de IP), resuelve primero por `destination_domains[]`, luego `destination_domain`, luego `domain`, y si no hay destino explícito aplica el fallback por `accountId` → `toCBU` → `toCUIT`. Después registra el movimiento y reenvía al dominio correspondiente firmando el payload con HMAC. Los movimientos no resueltos quedan pendientes de asignación manual.
 
 ## Stack
 
@@ -76,6 +76,9 @@ mysql -u root -p hgcash_gateway < migration_v2.sql
 
 # Migración v3: enterprise features (provider_sources, system_logs, HMAC, DLQ, ACK)
 mysql -u root -p hgcash_gateway < migration_v3.sql
+
+# Migración v4: multi-destino por hostname
+mysql -u root -p hgcash_gateway < migration_v4.sql
 ```
 
 Seed data incluido:
@@ -146,6 +149,7 @@ En la sección **Proveedores** del panel:
 ### Paso 2 — Crear dominio
 
 En **Dominios**:
+- `hostname`: hostname destino normalizado. Si no lo ingresás, se deriva desde `base_url`
 - `destination_webhook_url`: URL destino
 - `destination_token`: token enviado en `x-gateway-token`
 - `gateway_signing_secret`: generado automáticamente (usado para `x-gateway-signature`)
@@ -251,11 +255,12 @@ POST /api/webhooks/provider/hgcash/:token/update   # Update de movimiento existe
 5. Normaliza payload: acepta {provider_event_id, payload} o payload plano
 6. Genera gateway_event_id (UUID único)
 7. Deduplicación: rechaza si hg_id o provider_event_id ya existen
-8. Resolución de cuenta: accountId → toCBU → toCUIT
-9. Guarda movimiento en MySQL (con resolution_status + provider_source_id)
-10. Responde 200 { success, gateway_event_id }
+8. Detecta destinos explícitos en este orden: destination_domains[] → destination_domain → domain
+9. Si no vino dominio, mantiene el fallback actual: accountId → toCBU → toCUIT
+10. Guarda movimiento en MySQL con resolution_status + resolution_method
+11. Responde 200 { success, gateway_event_id }
 
-   Si RESOLVED:
+   Si resolved:
      → Crea webhook_delivery
      → Encola en BullMQ (Redis)
      → Worker: POST al domain.destination_webhook_url con headers firmados
@@ -264,7 +269,7 @@ POST /api/webhooks/provider/hgcash/:token/update   # Update de movimiento existe
      → Al 5to fallo: status = 'dead' (Dead Letter Queue)
      → Emite Socket.IO: movement:new
 
-   Si UNRESOLVED:
+   Si unresolved:
      → Guarda unresolved_reason
      → Emite Socket.IO: movement:unresolved
      → Admin resuelve manualmente → reenvía inmediatamente
@@ -477,9 +482,9 @@ Los logs son visibles en la página **Logs** del panel con filtros por nivel, so
 
 | Evento | Cuándo se emite |
 |--------|-----------------|
-| `movement:new` | Nuevo movimiento resuelto |
+| `movement:new` | Nuevo movimiento resuelto. Incluye `resolution_status`, `domains_count` y `metadata` |
 | `movement:unresolved` | Movimiento sin resolución automática |
-| `movement:resolved` | Movimiento asignado manualmente |
+| `movement:resolved` | Movimiento asignado manualmente. Incluye `resolution_status`, `domains_count` y `metadata` |
 | `movement:updated` | Update de movimiento existente |
 | `delivery:updated` | Cambio de estado en una entrega |
 | `stats:updated` | Estadísticas del dashboard invalidadas |
@@ -491,6 +496,7 @@ Los logs son visibles en la página **Logs** del panel con filtros por nivel, so
 | Estado | Descripción |
 |--------|-------------|
 | `resolved` | Resuelto automáticamente |
+| `multi_resolved` | Resuelto automáticamente hacia múltiples dominios |
 | `unresolved` | Sin cuenta/dominio → pendiente de asignación |
 | `manually_resolved` | Asignado manualmente por un administrador |
 
@@ -549,4 +555,83 @@ pm2 start ecosystem.config.cjs
 
 # Worker separado
 cd server && pm2 start --name "gateway-worker" npm -- run worker
+```
+
+## Payloads con destinos
+
+El proveedor puede enviar un dominio único:
+
+```json
+{
+  "provider_event_id": "prov_001",
+  "destination_domain": "siemprepaga.com",
+  "payload": {}
+}
+```
+
+O varios dominios:
+
+```json
+{
+  "provider_event_id": "prov_001",
+  "destination_domains": ["siemprepaga.com", "betcity.com"],
+  "payload": {}
+}
+```
+
+Prioridad de resolución:
+
+```txt
+destination_domains[]
+destination_domain
+domain
+accountId
+toCBU
+toCUIT
+unresolved
+```
+
+Notas:
+
+- `destination_domains[]` se normaliza a hostname y elimina duplicados
+- `destination_domain` y `domain` se tratan como hostnames individuales
+- Si llega un dominio inválido, se registra en `system_logs` con `invalid_destination_domain`
+- Si llegan varios dominios válidos, se crea un delivery por cada uno
+- No se crean deliveries duplicados para el mismo `movement_id + domain_id`
+
+### Ejemplo curl Bash
+
+```bash
+curl -X POST https://tu-gateway/api/webhooks/provider/hgcash/TOKEN_DEL_PROVEEDOR \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider_event_id": "prov_001",
+    "destination_domains": ["siemprepaga.com", "betcity.com"],
+    "payload": {
+      "id": "b1642cbc-9458-4f08-aae2-72c285783fda",
+      "amount": "1000",
+      "currency": "ARS",
+      "accountId": "c68ec492-6a49-40f1-8060-7c1cb38ac1f9"
+    }
+  }'
+```
+
+### Ejemplo curl PowerShell
+
+```powershell
+$body = @{
+  provider_event_id = 'prov_001'
+  destination_domain = 'siemprepaga.com'
+  payload = @{
+    id = 'b1642cbc-9458-4f08-aae2-72c285783fda'
+    amount = '1000'
+    currency = 'ARS'
+    accountId = 'c68ec492-6a49-40f1-8060-7c1cb38ac1f9'
+  }
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod -Method Post `
+  -Uri 'https://tu-gateway/api/webhooks/provider/hgcash/TOKEN_DEL_PROVEEDOR' `
+  -ContentType 'application/json' `
+  -Body $body
 ```

@@ -1,26 +1,32 @@
 const { pool } = require('../config/database');
+const { hasColumn } = require('./schemaService');
 const logger = require('../utils/logger');
-
-const SELECT_WITH_DOMAIN = `
-  SELECT a.*,
-    d.id           AS domain_id,
-    d.name         AS domain_name,
-    d.destination_webhook_url,
-    d.destination_token,
-    d.is_active    AS domain_is_active
-  FROM hgcash_accounts a
-  LEFT JOIN domains d ON a.domain_id = d.id
-  WHERE d.is_active = 1 AND a.is_active = 1
-`;
 
 function buildResult(method, row) {
   const domain = {
     id: row.domain_id,
     name: row.domain_name,
+    hostname: row.domain_hostname || null,
     destination_webhook_url: row.destination_webhook_url,
     destination_token: row.destination_token,
   };
   return { resolved: true, method, account: row, domain };
+}
+
+async function buildSelectWithDomain() {
+  const hasDomainHostname = await hasColumn('domains', 'hostname');
+  return `
+    SELECT a.*,
+      d.id           AS domain_id,
+      d.name         AS domain_name,
+      ${hasDomainHostname ? 'd.hostname AS domain_hostname' : 'NULL AS domain_hostname'},
+      d.destination_webhook_url,
+      d.destination_token,
+      d.is_active    AS domain_is_active
+    FROM hgcash_accounts a
+    LEFT JOIN domains d ON a.domain_id = d.id
+    WHERE d.is_active = 1 AND a.is_active = 1
+  `;
 }
 
 /**
@@ -33,8 +39,9 @@ async function resolveAccountForMovement(movementPayload) {
   const { accountId, toCBU, toCUIT } = movementPayload;
 
   if (accountId) {
+    const selectWithDomain = await buildSelectWithDomain();
     const [rows] = await pool.query(
-      `${SELECT_WITH_DOMAIN} AND a.account_id = ? LIMIT 1`,
+      `${selectWithDomain} AND a.account_id = ? LIMIT 1`,
       [accountId]
     );
     if (rows[0]) {
@@ -44,8 +51,9 @@ async function resolveAccountForMovement(movementPayload) {
   }
 
   if (toCBU) {
+    const selectWithDomain = await buildSelectWithDomain();
     const [rows] = await pool.query(
-      `${SELECT_WITH_DOMAIN} AND a.cbu = ? LIMIT 1`,
+      `${selectWithDomain} AND a.cbu = ? LIMIT 1`,
       [toCBU]
     );
     if (rows[0]) {
@@ -55,8 +63,9 @@ async function resolveAccountForMovement(movementPayload) {
   }
 
   if (toCUIT) {
+    const selectWithDomain = await buildSelectWithDomain();
     const [rows] = await pool.query(
-      `${SELECT_WITH_DOMAIN} AND a.cuit = ? LIMIT 1`,
+      `${selectWithDomain} AND a.cuit = ? LIMIT 1`,
       [toCUIT]
     );
     if (rows[0]) {

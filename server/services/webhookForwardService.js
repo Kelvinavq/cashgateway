@@ -24,6 +24,9 @@ async function forwardWebhook(delivery, movement, domain) {
   const headers = {
     'Content-Type':            'application/json',
     'x-gateway-token':         domain.destination_token || '',
+    'x-destination-domain':    domain.hostname || '',
+    'x-destination-domain-id': domain.id ? String(domain.id) : '',
+    'x-destination-domain-name': domain.name || '',
     'x-gateway-event-id':      movement.gateway_event_id || '',
     'x-provider-event-id':     movement.provider_event_id || '',
     'x-hg-movement-id':        movement.hg_id || '',          // original HG.Cash ID

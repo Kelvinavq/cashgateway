@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+﻿import { useState, useEffect, useCallback } from 'react';
 import {
   Box, Card, CardContent, Typography, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, TablePagination, IconButton, Tooltip, TextField,
@@ -11,19 +11,21 @@ import api from '../lib/api';
 import StatusChip from '../components/StatusChip';
 import { useSocket } from '../hooks/useSocket';
 import toast from 'react-hot-toast';
+import { RESOLUTION_STATUS_CONFIG } from '../../../shared/resolutionStatus.mjs';
 
 function formatAmount(n) {
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 0 }).format(n || 0);
 }
 function formatDate(d) {
-  if (!d) return 'â€”';
+  if (!d) return '—';
   return new Date(d).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' });
 }
 
 const RESOLUTION_STATUS_LABELS = {
-  resolved: 'Resuelto',
-  unresolved: 'No resuelto',
-  manually_resolved: 'Resuelto manual',
+  resolved: RESOLUTION_STATUS_CONFIG.resolved.label,
+  unresolved: RESOLUTION_STATUS_CONFIG.unresolved.label,
+  manually_resolved: RESOLUTION_STATUS_CONFIG.manually_resolved.label,
+  multi_resolved: RESOLUTION_STATUS_CONFIG.multi_resolved.label,
 };
 const RESOLUTION_METHOD_LABELS = {
   account_id: 'Account ID',
@@ -34,10 +36,10 @@ const RESOLUTION_METHOD_LABELS = {
 };
 
 function ResolutionChip({ status }) {
-  const colorMap = { resolved: 'success', unresolved: 'error', manually_resolved: 'warning' };
+  const colorMap = { resolved: 'success', unresolved: 'error', manually_resolved: 'warning', multi_resolved: 'primary' };
   return (
     <Chip
-      label={RESOLUTION_STATUS_LABELS[status] || status || 'â€”'}
+      label={RESOLUTION_STATUS_LABELS[status] || status || '—'}
       color={colorMap[status] || 'default'}
       size="small"
       sx={{ fontSize: 11, height: 20 }}
@@ -45,9 +47,23 @@ function ResolutionChip({ status }) {
   );
 }
 
+function parseJsonArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 function DetailField({ label, value, mono = false, copyable = false, onCopy }) {
-  const displayValue = value === undefined || value === null || value === '' ? 'â€”' : value;
-  const canCopy = copyable && displayValue !== 'â€”';
+  const displayValue = value === undefined || value === null || value === '' ? '—' : value;
+  const canCopy = copyable && displayValue !== '—';
 
   return (
     <Box
@@ -72,7 +88,7 @@ function DetailField({ label, value, mono = false, copyable = false, onCopy }) {
               wordBreak: 'break-word',
               lineHeight: 1.45,
               fontFamily: mono ? 'monospace' : 'inherit',
-              color: displayValue === 'â€”' ? 'text.disabled' : 'text.primary',
+              color: displayValue === '—' ? 'text.disabled' : 'text.primary',
             }}
           >
             {displayValue}
@@ -226,11 +242,11 @@ export default function Movements() {
   };
 
   const handleResolve = async () => {
-    if (!selectedAccount) { toast.error('SeleccionÃ¡ una cuenta HG.Cash'); return; }
+    if (!selectedAccount) { toast.error('Seleccioná una cuenta HG.Cash'); return; }
     setResolving(true);
     try {
       await api.post(`/movements/${resolveDialog.id}/resolve`, { hgcash_account_id: selectedAccount.id });
-      toast.success('Movimiento resuelto y reenvÃ­o encolado');
+      toast.success('Movimiento resuelto y reenvío encolado');
       setResolveDialog(null);
       setSelectedAccount(null);
       fetchMovements();
@@ -270,8 +286,8 @@ export default function Movements() {
           <Grid container spacing={1.5} alignItems="center">
             <Grid item xs={6} sm={4} md={2}>
               <FormControl fullWidth size="small">
-                <InputLabel>DirecciÃ³n</InputLabel>
-                <Select value={filters.direction} label="DirecciÃ³n"
+                <InputLabel>Dirección</InputLabel>
+                <Select value={filters.direction} label="Dirección"
                   onChange={e => setFilters(p => ({ ...p, direction: e.target.value }))}>
                   <MenuItem value="">Todas</MenuItem>
                   <MenuItem value="Inbound">Inbound</MenuItem>
@@ -281,11 +297,12 @@ export default function Movements() {
             </Grid>
             <Grid item xs={6} sm={4} md={2}>
               <FormControl fullWidth size="small">
-                <InputLabel>ResoluciÃ³n</InputLabel>
-                <Select value={filters.resolution_status} label="ResoluciÃ³n"
+                <InputLabel>Resolución</InputLabel>
+                <Select value={filters.resolution_status} label="Resolución"
                   onChange={e => setFilters(p => ({ ...p, resolution_status: e.target.value }))}>
                   <MenuItem value="">Todas</MenuItem>
                   <MenuItem value="resolved">Resuelto</MenuItem>
+                  <MenuItem value="multi_resolved">Multi destino</MenuItem>
                   <MenuItem value="unresolved">No resuelto</MenuItem>
                   <MenuItem value="manually_resolved">Manual</MenuItem>
                 </Select>
@@ -293,8 +310,8 @@ export default function Movements() {
             </Grid>
             <Grid item xs={6} sm={4} md={2}>
               <FormControl fullWidth size="small">
-                <InputLabel>MÃ©todo</InputLabel>
-                <Select value={filters.resolution_method} label="MÃ©todo"
+                <InputLabel>Método</InputLabel>
+                <Select value={filters.resolution_method} label="Método"
                   onChange={e => setFilters(p => ({ ...p, resolution_method: e.target.value }))}>
                   <MenuItem value="">Todos</MenuItem>
                   <MenuItem value="account_id">Account ID</MenuItem>
@@ -343,8 +360,8 @@ export default function Movements() {
                 <TableCell>Monto</TableCell>
                 <TableCell sx={hideMd}>Dir.</TableCell>
                 <TableCell sx={hideLg}>Cuenta</TableCell>
-                <TableCell>ResoluciÃ³n</TableCell>
-                <TableCell sx={hideMd}>MÃ©todo</TableCell>
+                <TableCell>Resolución</TableCell>
+                <TableCell sx={hideMd}>Método</TableCell>
                 <TableCell sx={hideSm}>Entrega</TableCell>
                 <TableCell align="right">Acciones</TableCell>
               </TableRow>
@@ -372,35 +389,51 @@ export default function Movements() {
                         No se encontraron movimientos
                       </Typography>
                       <Typography variant="caption" color="text.disabled">
-                        AjustÃ¡ los filtros o esperÃ¡ nuevas transacciones
+                        Ajustá los filtros o esperá nuevas transacciones
                       </Typography>
                     </Box>
                   </TableCell>
                 </TableRow>
               ) : rows.map(row => (
                 <TableRow key={row.id} hover
-                  sx={row.resolution_status === 'unresolved' ? { bgcolor: 'rgba(239,68,68,0.04)' } : {}}>
+                  sx={row.resolution_status === 'unresolved'
+                    ? { bgcolor: 'rgba(239,68,68,0.04)' }
+                    : row.resolution_status === 'multi_resolved'
+                      ? { bgcolor: 'rgba(99,102,241,0.05)' }
+                      : {}}>
                   <TableCell sx={{ fontSize: 12, whiteSpace: 'nowrap', color: 'text.secondary' }}>
                     {formatDate(row.received_at)}
                   </TableCell>
-                  <TableCell sx={{ fontSize: 12, ...hideSm }}>{row.domain_name || 'â€”'}</TableCell>
+                  <TableCell sx={{ fontSize: 12, ...hideSm }}>
+                    <Stack spacing={0.25}>
+                      <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
+                        {row.domain_hostname || '—'}
+                      </Typography>
+                      <Typography variant="body2" fontWeight={600}>
+                        {row.domain_name || '—'}
+                      </Typography>
+                      {parseJsonArray(row.destination_domains_raw).length > 1 && (
+                        <Chip size="small" label={`Multi destino · ${parseJsonArray(row.destination_domains_raw).length}`} sx={{ width: 'fit-content', fontSize: 10, height: 18 }} />
+                      )}
+                    </Stack>
+                  </TableCell>
                   <TableCell sx={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>
                     {formatAmount(row.amount)}
                   </TableCell>
                   <TableCell sx={{ fontSize: 12, ...hideMd }}><StatusChip status={row.direction} /></TableCell>
-                  <TableCell sx={{ fontSize: 11, ...hideLg }}>{row.account_name || 'â€”'}</TableCell>
+                  <TableCell sx={{ fontSize: 11, ...hideLg }}>{row.account_name || '—'}</TableCell>
                   <TableCell>
                     <Stack direction="row" spacing={0.5} alignItems="center">
                       <ResolutionChip status={row.resolution_status} />
                       {row.resolution_status === 'unresolved' && (
-                        <Tooltip title={row.unresolved_reason || 'Sin razÃ³n'}>
+                        <Tooltip title={row.unresolved_reason || 'Sin razón'}>
                           <WarningAmber sx={{ fontSize: 14, color: 'error.main', cursor: 'help' }} />
                         </Tooltip>
                       )}
                     </Stack>
                   </TableCell>
                   <TableCell sx={{ fontSize: 11, ...hideMd }}>
-                    {RESOLUTION_METHOD_LABELS[row.resolution_method] || 'â€”'}
+                    {RESOLUTION_METHOD_LABELS[row.resolution_method] || '—'}
                   </TableCell>
                   <TableCell sx={hideSm}>
                     <StatusChip status={row.delivery_status || (row.resolution_status === 'unresolved' ? 'unresolved' : 'pending')} />
@@ -444,7 +477,7 @@ export default function Movements() {
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={e => { setRowsPerPage(parseInt(e.target.value)); setPage(0); }}
           rowsPerPageOptions={[10, 20, 50]}
-          labelRowsPerPage={isMobile ? '' : 'Por pÃ¡gina:'}
+          labelRowsPerPage={isMobile ? '' : 'Por página:'}
         />
       </Card>
 
@@ -513,6 +546,12 @@ export default function Movements() {
                     <StatusChip status={detailDialog.direction} />
                     <ResolutionChip status={detailDialog.resolution_status} />
                     <StatusChip status={detailDialog.delivery_status || (detailDialog.resolution_status === 'unresolved' ? 'unresolved' : 'pending')} />
+                    {detailDialog.resolution_status === 'multi_resolved' && (
+                      <Chip size="small" color="primary" variant="outlined" label="Multi destino" />
+                    )}
+                    {parseJsonArray(detailDialog.destination_domains_raw).length > 1 && (
+                      <Chip size="small" color="primary" label={`Multi destino · ${parseJsonArray(detailDialog.destination_domains_raw).length}`} />
+                    )}
                   </Stack>
                   <Button
                     size="small"
@@ -588,6 +627,11 @@ export default function Movements() {
                         { label: 'Account ID recibido', value: detailDialog.account_id, copyable: true, mono: true },
                         { label: 'Cuenta HG', value: detailDialog.account_name, copyable: true },
                         { label: 'Dominio resuelto', value: detailDialog.domain_name, copyable: true },
+                        { label: 'Deliveries generados', value: detailDialog.delivery_count },
+                        { label: 'Dominios destino', value: parseJsonArray(detailDialog.destination_domains_raw).join(', '), copyable: true },
+                        { label: 'Destino raw', value: detailDialog.destination_domain_raw, copyable: true },
+                        { label: 'Destino primario', value: detailDialog.domain_hostname, copyable: true },
+                        { label: 'Estado visual', value: RESOLUTION_STATUS_LABELS[detailDialog.resolution_status] || detailDialog.resolution_status },
                         { label: 'Razón no resuelto', value: detailDialog.unresolved_reason },
                       ].map(field => (
                         <Grid item xs={12} sm={6} key={field.label}>
@@ -703,10 +747,10 @@ export default function Movements() {
                     <TableRow key={d.id}>
                       <TableCell><StatusChip status={d.status} /></TableCell>
                       <TableCell>{d.attempts}</TableCell>
-                      <TableCell>{d.last_http_status || 'â€”'}</TableCell>
+                      <TableCell>{d.last_http_status || '—'}</TableCell>
                       <TableCell sx={{ fontSize: 11, maxWidth: 180 }}>
                         <Typography variant="caption" title={d.last_error}>
-                          {d.last_error?.substring(0, 50) || 'â€”'}
+                          {d.last_error?.substring(0, 50) || '—'}
                         </Typography>
                       </TableCell>
                       <TableCell sx={{ fontSize: 11, whiteSpace: 'nowrap' }}>{formatDate(d.updated_at)}</TableCell>
@@ -756,7 +800,7 @@ export default function Movements() {
                   {resolveDialog.hg_id}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  Account ID recibido: {resolveDialog.account_id || 'â€”'}
+                  Account ID recibido: {resolveDialog.account_id || '—'}
                 </Typography>
                 {resolveDialog.unresolved_reason && (
                   <Typography variant="caption" color="error" display="block" sx={{ mt: 0.75 }}>
@@ -766,7 +810,7 @@ export default function Movements() {
               </Box>
               <Autocomplete
                 options={accounts}
-                getOptionLabel={a => `${a.name} â€” ${a.account_id} (${a.domain_name || 'sin dominio'})`}
+                getOptionLabel={a => `${a.name} — ${a.account_id} (${a.domain_name || 'sin dominio'})`}
                 value={selectedAccount}
                 onChange={(_, v) => setSelectedAccount(v)}
                 renderInput={params => (
