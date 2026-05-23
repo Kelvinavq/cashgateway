@@ -296,55 +296,87 @@ x-gateway-signature: sha256=<HMAC-SHA256>
 x-gateway-timestamp: <unix_timestamp>
 ```
 
+**Payload firmado:** `${timestamp}.${rawBody}` — el timestamp se incluye en la firma para prevenir replay attacks sin necesidad de almacenar nonces.
+
 ### Verificación en el dominio destino (Node.js)
 
 ```javascript
 const crypto = require('crypto');
 
-function verifyGatewaySignature(req) {
-  const secret = process.env.GATEWAY_SIGNING_SECRET;
+// IMPORTANTE: usar el raw body (Buffer), no JSON.stringify(req.body)
+// El orden de las propiedades JSON puede variar entre parsers.
+app.post('/webhooks/hgcash', express.raw({ type: 'application/json' }), (req, res) => {
+  const rawBody   = req.body.toString('utf8'); // bytes exactos recibidos
+  const secret    = process.env.GATEWAY_SIGNING_SECRET;
   const signature = req.headers['x-gateway-signature'];
   const timestamp = req.headers['x-gateway-timestamp'];
 
-  if (!signature || !timestamp) return false;
+  if (!signature || !timestamp) {
+    return res.status(401).json({ error: 'Missing signature headers' });
+  }
 
-  // Prevenir replay attacks (5 min de tolerancia)
-  const age = Math.abs(Date.now() / 1000 - parseInt(timestamp));
-  if (age > 300) return false;
+  // Anti-replay: rechazar si el mensaje tiene más de 5 minutos
+  const age = Math.abs(Math.floor(Date.now() / 1000) - parseInt(timestamp, 10));
+  if (age > 300) {
+    return res.status(401).json({ error: 'Replay attack detected' });
+  }
 
-  const body = JSON.stringify(req.body);
+  // El payload firmado incluye el timestamp para ligar la firma al momento
+  const signedPayload = `${timestamp}.${rawBody}`;
   const expected = 'sha256=' + crypto
     .createHmac('sha256', secret)
-    .update(body)
+    .update(signedPayload)
     .digest('hex');
 
-  return crypto.timingSafeEqual(
+  // Comparación en tiempo constante — NUNCA usar ===
+  const valid = crypto.timingSafeEqual(
     Buffer.from(signature),
     Buffer.from(expected)
   );
-}
 
-app.post('/webhooks/hgcash', express.json(), (req, res) => {
-  if (!verifyGatewaySignature(req)) {
-    return res.status(401).json({ error: 'Invalid signature' });
-  }
+  if (!valid) return res.status(401).json({ error: 'Invalid signature' });
+
+  const payload = JSON.parse(rawBody);
   // Procesar el webhook...
+  res.json({ received: true, gateway_event_id: req.headers['x-gateway-event-id'], processed: true });
 });
 ```
 
 ### Verificación en el dominio destino (PHP)
 
 ```php
-function verifyGatewaySignature(string $body, array $headers, string $secret): bool {
-    $signature = $headers['x-gateway-signature'] ?? '';
-    $timestamp  = $headers['x-gateway-timestamp']  ?? 0;
+// IMPORTANTE: leer el raw body antes de que cualquier framework lo parsee
+$rawBody   = file_get_contents('php://input');
+$secret    = getenv('GATEWAY_SIGNING_SECRET');
+$signature = $_SERVER['HTTP_X_GATEWAY_SIGNATURE'] ?? '';
+$timestamp = $_SERVER['HTTP_X_GATEWAY_TIMESTAMP'] ?? 0;
 
-    $age = abs(time() - (int)$timestamp);
-    if ($age > 300) return false;
+function verifyGatewaySignature(
+    string $rawBody,
+    string $secret,
+    string $signature,
+    int|string $timestamp,
+    int $toleranceSec = 300
+): bool {
+    if (!$signature || !$timestamp) return false;
 
-    $expected = 'sha256=' . hash_hmac('sha256', $body, $secret);
+    // Anti-replay
+    if (abs(time() - (int)$timestamp) > $toleranceSec) return false;
+
+    // El payload firmado incluye el timestamp
+    $signedPayload = "{$timestamp}.{$rawBody}";
+    $expected = 'sha256=' . hash_hmac('sha256', $signedPayload, $secret);
+
+    // Comparación en tiempo constante
     return hash_equals($expected, $signature);
 }
+
+if (!verifyGatewaySignature($rawBody, $secret, $signature, $timestamp)) {
+    http_response_code(401);
+    echo json_encode(['error' => 'Invalid signature']);
+    exit;
+}
+$payload = json_decode($rawBody, true);
 ```
 
 ---
@@ -386,6 +418,21 @@ Después de 5 intentos fallidos, una entrega pasa a estado `dead`:
 
 ---
 
+## Respuesta del webhook
+
+### Movimiento nuevo
+```json
+{ "success": true, "duplicate": false, "message": "Webhook received", "gateway_event_id": "uuid" }
+```
+
+### Webhook duplicado (mismo `hg_id` o `provider_event_id` ya procesado)
+```json
+{ "success": true, "duplicate": true, "message": "Webhook already processed", "gateway_event_id": "uuid-original" }
+```
+HTTP siempre `200`. El `gateway_event_id` devuelto en duplicados es el del movimiento original.
+
+---
+
 ## Logs del sistema (v3)
 
 Todos los eventos significativos se persisten en la tabla `system_logs`:
@@ -393,6 +440,7 @@ Todos los eventos significativos se persisten en la tabla `system_logs`:
 | `event_type` | Descripción |
 |-------------|-------------|
 | `webhook_received` | Webhook recibido del proveedor |
+| `duplicate_webhook` | Webhook duplicado detectado y descartado |
 | `movement_unresolved` | Movimiento sin cuenta/dominio asignable |
 | `delivery_success` | Entrega exitosa |
 | `delivery_retry` | Reintento de entrega |
@@ -414,13 +462,14 @@ Los logs son visibles en la página **Logs** del panel con filtros por nivel, so
 | `x-gateway-token` | `domain.destination_token` |
 | `x-gateway-event-id` | UUID generado por el gateway |
 | `x-provider-event-id` | ID del proveedor (si existe) |
-| `x-hg-movement-id` | ID interno del movimiento |
+| `x-hg-movement-id` | ID original del movimiento en HG.Cash (`payload.id`) |
+| `x-gateway-movement-id` | ID interno del movimiento en la DB del gateway |
 | `x-hg-account-id` | `accountId` del payload original |
 | `x-hg-account-db-id` | ID de la cuenta en la DB del gateway |
 | `x-domain-id` | ID del dominio en la DB del gateway |
 | `x-coelsa-code` | Código COELSA del movimiento |
-| `x-gateway-timestamp` | Unix timestamp de la entrega |
-| `x-gateway-signature` | `sha256=<HMAC>` (solo si el dominio tiene secreto) |
+| `x-gateway-timestamp` | Unix timestamp de la entrega (usado en firma HMAC) |
+| `x-gateway-signature` | `sha256=<HMAC>` — solo si el dominio tiene secreto configurado |
 
 ---
 
@@ -488,7 +537,7 @@ curl -X POST https://tu-gateway/api/webhooks/provider/hgcash/TOKEN_DEL_PROVEEDOR
 
 Respuesta:
 ```json
-{ "success": true, "message": "Webhook received", "gateway_event_id": "uuid-generado" }
+{ "success": true, "duplicate": false, "message": "Webhook received", "gateway_event_id": "uuid-generado" }
 ```
 
 ---

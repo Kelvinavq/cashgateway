@@ -120,7 +120,7 @@ async function receiveWebhook(req, res, next) {
     const gatewayEventId = uuidv4();
     const resolveResult = await resolveAccountForMovement(movementPayload);
 
-    const { duplicate, id: movementId } = await saveMovement(
+    const { duplicate, id: movementId, gatewayEventId: dupGatewayEventId } = await saveMovement(
       movementPayload,
       resolveResult,
       {
@@ -131,12 +131,27 @@ async function receiveWebhook(req, res, next) {
       }
     );
 
-    res.status(200).json({ success: true, message: 'Webhook received', gateway_event_id: gatewayEventId });
-
     if (duplicate) {
-      logger.info(`Duplicate webhook ignored: hg_id=${movementPayload.id}`);
-      return;
+      logService.info({
+        source: 'webhookController',
+        event_type: 'duplicate_webhook',
+        request_id: req.requestId,
+        gateway_event_id: dupGatewayEventId,
+        provider_source_id: providerSource?.id,
+        movement_id: movementId,
+        message: `Duplicate webhook ignored: hg_id=${movementPayload.id}`,
+        ip_address: ip,
+        metadata: { hg_id: movementPayload.id, provider_event_id: providerEventId },
+      });
+      return res.status(200).json({
+        success: true,
+        duplicate: true,
+        message: 'Webhook already processed',
+        gateway_event_id: dupGatewayEventId,
+      });
     }
+
+    res.status(200).json({ success: true, duplicate: false, message: 'Webhook received', gateway_event_id: gatewayEventId });
 
     setImmediate(async () => {
       try {

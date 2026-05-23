@@ -8,10 +8,6 @@ Dominio de producción: `https://flowhg.online`
 
 El token va en la URL. Se obtiene creando un **Proveedor** en el panel admin → sección *Proveedores*. El token se muestra **una sola vez** al crearlo; guárdalo de inmediato.
 
-```
-{token} = token generado al crear el proveedor en el panel
-```
-
 Si el proveedor tiene **IP whitelist** configurada, solo se aceptan requests desde esas IPs/CIDRs. Otros IPs reciben `401`.
 
 **Rate limiting:** 100 req/min por proveedor · 300 req/min por IP → exceder retorna `429 Too Many Requests`.
@@ -71,17 +67,31 @@ Content-Type: application/json
 }
 ```
 
-### Respuesta exitosa
+### Respuesta — movimiento nuevo
 
 ```json
 {
   "success": true,
+  "duplicate": false,
   "message": "Webhook received",
   "gateway_event_id": "3f6a9c12-8b44-4e7f-b2c0-1d5e7f9a0123"
 }
 ```
 
-> **Deduplicación:** si `id` del payload o `provider_event_id` ya existen en la base, el gateway responde `200` sin crear un duplicado.
+### Respuesta — webhook duplicado
+
+Si el `id` del payload o el `provider_event_id` ya fueron procesados, el gateway responde `200` con:
+
+```json
+{
+  "success": true,
+  "duplicate": true,
+  "message": "Webhook already processed",
+  "gateway_event_id": "uuid-del-movimiento-original"
+}
+```
+
+No se crea un movimiento ni una entrega duplicada. El `gateway_event_id` devuelto es el del movimiento original.
 
 ---
 
@@ -97,7 +107,7 @@ Headers:
 Content-Type: application/json
 ```
 
-Busca el movimiento por `id` del payload (campo HG.Cash) o por `coelsaCode`. Si no existe, lo crea para no perder el evento.
+Busca el movimiento por `id` del payload o por `coelsaCode`. Si no existe, lo crea.
 
 ```json
 {
@@ -159,48 +169,116 @@ Cuando el movimiento se resuelve, el gateway lo reenvía al `destination_webhook
 | `x-gateway-token` | Token del dominio destino (`destination_token`) |
 | `x-gateway-event-id` | UUID único generado por el gateway |
 | `x-provider-event-id` | `provider_event_id` del proveedor (si existe) |
-| `x-hg-movement-id` | ID interno del movimiento en el gateway |
+| `x-hg-movement-id` | ID original del movimiento en HG.Cash (`payload.id`) |
+| `x-gateway-movement-id` | ID interno del movimiento en la DB del gateway |
 | `x-hg-account-id` | `accountId` del payload original |
 | `x-hg-account-db-id` | ID de la cuenta en la DB del gateway |
 | `x-domain-id` | ID del dominio en la DB del gateway |
 | `x-coelsa-code` | Código COELSA del movimiento |
-| `x-gateway-timestamp` | Unix timestamp de la entrega |
+| `x-gateway-timestamp` | Unix timestamp de la entrega (incluido en la firma HMAC) |
 | `x-gateway-signature` | `sha256=<HMAC>` — solo si el dominio tiene secreto de firma |
 
-### Verificar la firma HMAC en el destino (Node.js)
+---
+
+## Firma HMAC
+
+### Cómo se genera
+
+```
+signed_payload = timestamp + "." + rawBody
+signature      = sha256-HMAC(signed_payload, gateway_signing_secret)
+header         = "sha256=" + hex(signature)
+```
+
+El timestamp está incluido en el payload firmado — esto liga la firma al momento exacto y permite detectar replay attacks sin almacenar nonces.
+
+### Verificar la firma en el destino (Node.js)
 
 ```javascript
 const crypto = require('crypto');
 
-function verifyGatewaySignature(req) {
+// Usar raw body — nunca JSON.stringify(req.body)
+// El orden de propiedades JSON puede variar entre parsers
+app.post('/webhooks/hgcash', express.raw({ type: 'application/json' }), (req, res) => {
+  const rawBody   = req.body.toString('utf8');
   const secret    = process.env.GATEWAY_SIGNING_SECRET;
   const signature = req.headers['x-gateway-signature'];
   const timestamp = req.headers['x-gateway-timestamp'];
 
-  if (!signature || !timestamp) return false;
+  if (!signature || !timestamp) {
+    return res.status(401).json({ error: 'Missing signature headers' });
+  }
 
-  // Prevenir replay attacks (tolerancia 5 minutos)
-  if (Math.abs(Date.now() / 1000 - parseInt(timestamp)) > 300) return false;
+  // Anti-replay: rechazar mensajes con más de 5 minutos de antigüedad
+  const age = Math.abs(Math.floor(Date.now() / 1000) - parseInt(timestamp, 10));
+  if (age > 300) {
+    return res.status(401).json({ error: 'Replay attack detected' });
+  }
 
+  // El payload firmado incluye timestamp + cuerpo
+  const signedPayload = `${timestamp}.${rawBody}`;
   const expected = 'sha256=' + crypto
     .createHmac('sha256', secret)
-    .update(JSON.stringify(req.body))
+    .update(signedPayload)
     .digest('hex');
 
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-}
+  // Comparación en tiempo constante — nunca usar ===
+  const valid = crypto.timingSafeEqual(
+    Buffer.from(signature),
+    Buffer.from(expected)
+  );
+
+  if (!valid) return res.status(401).json({ error: 'Invalid signature' });
+
+  const payload = JSON.parse(rawBody);
+  // Procesar...
+  res.json({
+    received: true,
+    gateway_event_id: req.headers['x-gateway-event-id'],
+    processed: true,
+  });
+});
 ```
 
-### Verificar la firma HMAC en el destino (PHP)
+### Verificar la firma en el destino (PHP)
 
 ```php
-function verifyGatewaySignature(string $body, array $headers, string $secret): bool {
-    $signature = $headers['x-gateway-signature'] ?? '';
-    $timestamp  = $headers['x-gateway-timestamp']  ?? 0;
-    if (abs(time() - (int)$timestamp) > 300) return false;
-    return hash_equals('sha256=' . hash_hmac('sha256', $body, $secret), $signature);
+// Leer el raw body antes de que el framework lo parsee
+$rawBody   = file_get_contents('php://input');
+$secret    = getenv('GATEWAY_SIGNING_SECRET');
+$signature = $_SERVER['HTTP_X_GATEWAY_SIGNATURE'] ?? '';
+$timestamp = $_SERVER['HTTP_X_GATEWAY_TIMESTAMP'] ?? 0;
+
+function verifyGatewaySignature(
+    string $rawBody,
+    string $secret,
+    string $signature,
+    int|string $timestamp,
+    int $toleranceSec = 300
+): bool {
+    if (!$signature || !$timestamp) return false;
+
+    // Anti-replay
+    if (abs(time() - (int)$timestamp) > $toleranceSec) return false;
+
+    // Payload firmado: timestamp.rawBody
+    $signedPayload = "{$timestamp}.{$rawBody}";
+    $expected = 'sha256=' . hash_hmac('sha256', $signedPayload, $secret);
+
+    // Comparación en tiempo constante
+    return hash_equals($expected, $signature);
 }
+
+if (!verifyGatewaySignature($rawBody, $secret, $signature, $timestamp)) {
+    http_response_code(401);
+    echo json_encode(['error' => 'Invalid signature']);
+    exit;
+}
+
+$payload = json_decode($rawBody, true);
 ```
+
+---
 
 ### Respuesta ACK esperada (si el dominio tiene `require_ack = 1`)
 
@@ -220,7 +298,8 @@ Si la respuesta es inválida, el gateway reintenta la entrega y registra `ack_va
 
 | HTTP | Motivo |
 |------|--------|
-| `200` | OK (incluso en duplicados — ver `success: false` en el cuerpo) |
+| `200` | OK (incluyendo duplicados — verificar `duplicate` en el cuerpo) |
+| `400` | Payload inválido o `id` faltante |
 | `401` | Token inválido o IP no permitida |
 | `429` | Rate limit excedido |
 | `500` | Error interno del gateway |

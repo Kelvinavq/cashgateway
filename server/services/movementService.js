@@ -34,22 +34,22 @@ async function saveMovement(movementPayload, resolveResult, meta = {}) {
 
   // Dedup by hg_id (primary) or provider_event_id (secondary, when provided)
   const [existing] = await pool.query(
-    'SELECT id FROM movements WHERE hg_id = ? LIMIT 1',
+    'SELECT id, gateway_event_id FROM movements WHERE hg_id = ? LIMIT 1',
     [hg_id]
   );
   if (existing[0]) {
     logger.info(`Duplicate movement ignored: hg_id=${hg_id}`);
-    return { duplicate: true, id: existing[0].id };
+    return { duplicate: true, id: existing[0].id, gatewayEventId: existing[0].gateway_event_id };
   }
 
   if (providerEventId) {
     const [existingProv] = await pool.query(
-      'SELECT id FROM movements WHERE provider_event_id = ? LIMIT 1',
+      'SELECT id, gateway_event_id FROM movements WHERE provider_event_id = ? LIMIT 1',
       [providerEventId]
     );
     if (existingProv[0]) {
       logger.info(`Duplicate movement ignored: provider_event_id=${providerEventId}`);
-      return { duplicate: true, id: existingProv[0].id };
+      return { duplicate: true, id: existingProv[0].id, gatewayEventId: existingProv[0].gateway_event_id };
     }
   }
 
