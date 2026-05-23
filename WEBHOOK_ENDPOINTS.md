@@ -34,6 +34,7 @@ Recomendado cuando el proveedor quiere incluir metadatos del evento además del 
 {
   "provider_event_id": "prov_001",
   "received_by_provider_at": "2026-05-16T14:36:59-03:00",
+  "provider_status": "paid",
   "destination_domain": "siemprepaga.com",
   "payload": {
     "id": "b1642cbc-9458-4f08-aae2-72c285783fda",
@@ -63,6 +64,7 @@ Si el proveedor ya sabe a qué dominios debe reenviar el webhook, puede enviarlo
 ```json
 {
   "provider_event_id": "prov_001",
+  "provider_status": "pending",
   "destination_domains": [
     "siemprepaga.com",
     "betcity.com"
@@ -87,6 +89,7 @@ También se acepta un payload sin wrapper. Si `destination_domain` o `destinatio
   "currency": "ARS",
   "direction": "Inbound",
   "status": "done",
+  "provider_status": "rejected",
   "destination_domain": "siemprepaga.com",
   "accountId": "c68ec492-6a49-40f1-8060-7c1cb38ac1f9",
   "coelsaCode": "WGRXJE27DPD7L566N7MYQL"
@@ -125,6 +128,7 @@ Se elimina protocolo, path, querystring, slash final y `www.` opcional. Si el va
 - Si llega un solo `destination_domain` o `domain`, se crea un delivery para ese dominio.
 - Si no viene ningún dominio explícito, el gateway mantiene el flujo actual por `accountId`, `toCBU` y `toCUIT`.
 - Si ningún destino se resuelve, el movimiento queda `unresolved`.
+- `provider_status` siempre se guarda fuera de `payload` y nunca pisa `payload.status`.
 - No se descartan webhooks válidos.
 - No se crean movimientos duplicados.
 - No se crean deliveries duplicados para el mismo `movement_id + domain_id`.
@@ -182,6 +186,7 @@ Si no existe, se crea como un webhook nuevo y se resuelve con la misma lógica q
 ```json
 {
   "id": "b1642cbc-9458-4f08-aae2-72c285783fda",
+  "provider_status": "paid",
   "status": "reversed",
   "coelsaCode": "WGRXJE27DPD7L566N7MYQL",
   "destination_domains": [

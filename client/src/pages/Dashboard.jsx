@@ -8,7 +8,7 @@ import {
   TrendingUp, TrendingDown, CheckCircle, ReportProblemOutlined,
   HourglassEmpty, AttachMoney, SwapHoriz, TaskAlt, WarningAmber, BuildCircle,
   Source, MailOutlined, GppMaybe, SpeedOutlined, RotateRight,
-  ErrorOutlined, Block, Send,
+  ErrorOutlined, Block, Send, CancelOutlined,
 } from '@mui/icons-material';
 import api from '../lib/api';
 import { useSocket } from '../hooks/useSocket';
@@ -96,6 +96,34 @@ function SectionLabel({ label, accentColor = '#6366f1' }) {
   );
 }
 
+function ProviderStatusChip({ status }) {
+  const map = {
+    pending: { label: 'Pendiente', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
+    paid: { label: 'Pagado', color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
+    rejected: { label: 'Rechazado', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
+  };
+  const c = map[status] || { label: status || '—', color: '#64748b', bg: 'rgba(100,116,139,0.12)' };
+  return (
+    <Box component="span" sx={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '5px',
+      px: '8px',
+      py: '3px',
+      borderRadius: '6px',
+      fontSize: '0.688rem',
+      fontWeight: 600,
+      bgcolor: c.bg,
+      color: c.color,
+      border: `1px solid ${c.color}22`,
+      whiteSpace: 'nowrap',
+    }}>
+      <Box component="span" sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'currentColor' }} />
+      {c.label}
+    </Box>
+  );
+}
+
 function fmtARS(n) {
   if (!n) return '$0';
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 0 }).format(n);
@@ -152,6 +180,12 @@ export default function Dashboard() {
     { label: 'Dominios inválidos',  value: s?.security.invalid_destination_domains, Icon: WarningAmber,colorKey: 'amber'  },
     { label: 'Deliveries multi',    value: s?.deliveries.multi_destination,         Icon: Send,        colorKey: 'green'  },
     { label: 'Unresolved inválido', value: s?.movements.unresolved_invalid_domain,  Icon: GppMaybe,    colorKey: 'red'    },
+  ];
+
+  const proveedorKpis = [
+    { label: 'Pendiente', value: s?.movements.provider_pending,  Icon: HourglassEmpty, colorKey: 'amber' },
+    { label: 'Pagado',    value: s?.movements.provider_paid,     Icon: CheckCircle,    colorKey: 'green' },
+    { label: 'Rechazado', value: s?.movements.provider_rejected, Icon: CancelOutlined, colorKey: 'red'   },
   ];
 
   const entregasKpis = [
@@ -228,6 +262,15 @@ export default function Dashboard() {
         ))}
       </Grid>
 
+      <SectionLabel label="Estado proveedor" accentColor="#14b8a6" />
+      <Grid container spacing={{ xs: 1, sm: 1.5 }} sx={{ mb: 2.5 }}>
+        {proveedorKpis.map(k => (
+          <Grid key={k.label} item xs={4} sm={4} md={3}>
+            <StatCard {...k} loading={loading} />
+          </Grid>
+        ))}
+      </Grid>
+
       {/* ── Seguridad & Enterprise ── */}
       <SectionLabel label="Seguridad & Enterprise" accentColor="#f59e0b" />
       <Grid container spacing={{ xs: 1, sm: 1.5 }} sx={{ mb: 3 }}>
@@ -285,6 +328,8 @@ export default function Dashboard() {
                     <TableCell>Dominio</TableCell>
                     <TableCell>Monto</TableCell>
                     <TableCell>Dir.</TableCell>
+                    <TableCell>HG</TableCell>
+                    <TableCell>Estado proveedor</TableCell>
                     <TableCell>Resolución</TableCell>
                     <TableCell>Entrega</TableCell>
                   </TableRow>
@@ -293,14 +338,14 @@ export default function Dashboard() {
                   {loading ? (
                     [...Array(6)].map((_, i) => (
                       <TableRow key={i}>
-                        {[...Array(6)].map((_, j) => (
+                        {[...Array(8)].map((_, j) => (
                           <TableCell key={j}><Skeleton sx={{ transform: 'none' }} /></TableCell>
                         ))}
                       </TableRow>
                     ))
                   ) : !s?.recent_movements?.length ? (
                     <TableRow>
-                      <TableCell colSpan={6}>
+                      <TableCell colSpan={8}>
                         <Box sx={{ py: 5, textAlign: 'center' }}>
                           <Box sx={{
                             width: 44, height: 44, borderRadius: '12px',
@@ -325,6 +370,8 @@ export default function Dashboard() {
                       <TableCell sx={{ fontWeight: 500 }}>{m.domain_name || '—'}</TableCell>
                       <TableCell sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtARS(m.amount)}</TableCell>
                       <TableCell><StatusChip status={m.direction} /></TableCell>
+                      <TableCell><StatusChip status={m.status} /></TableCell>
+                      <TableCell><ProviderStatusChip status={m.provider_status} /></TableCell>
                       <TableCell><StatusChip status={m.resolution_status} /></TableCell>
                       <TableCell>
                         <StatusChip status={m.delivery_status || (m.resolution_status === 'unresolved' ? 'unresolved' : 'pending')} />

@@ -35,6 +35,12 @@ const RESOLUTION_METHOD_LABELS = {
   none: 'Ninguno',
 };
 
+const PROVIDER_STATUS_LABELS = {
+  pending: 'Pendiente',
+  paid: 'Pagado',
+  rejected: 'Rechazado',
+};
+
 function ResolutionChip({ status }) {
   const colorMap = { resolved: 'success', unresolved: 'error', manually_resolved: 'warning', multi_resolved: 'primary' };
   return (
@@ -42,6 +48,24 @@ function ResolutionChip({ status }) {
       label={RESOLUTION_STATUS_LABELS[status] || status || '—'}
       color={colorMap[status] || 'default'}
       size="small"
+      sx={{ fontSize: 11, height: 20 }}
+    />
+  );
+}
+
+function ProviderStatusChip({ status }) {
+  const colorMap = {
+    pending: { label: 'Pendiente', color: 'warning' },
+    paid: { label: 'Pagado', color: 'success' },
+    rejected: { label: 'Rechazado', color: 'error' },
+  };
+  const cfg = colorMap[status] || { label: status || '—', color: 'default' };
+  return (
+    <Chip
+      label={cfg.label}
+      color={cfg.color}
+      size="small"
+      variant={status ? 'filled' : 'outlined'}
       sx={{ fontSize: 11, height: 20 }}
     />
   );
@@ -145,7 +169,7 @@ export default function Movements() {
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({
     direction: '', coelsa_code: '', cuit: '', cbu: '',
-    resolution_status: '', resolution_method: '',
+    resolution_status: '', resolution_method: '', provider_status: '',
   });
 
   const [detailDialog, setDetailDialog] = useState(null);
@@ -258,7 +282,7 @@ export default function Movements() {
   };
 
   const clearFilters = () => {
-    setFilters({ direction: '', coelsa_code: '', cuit: '', cbu: '', resolution_status: '', resolution_method: '' });
+    setFilters({ direction: '', coelsa_code: '', cuit: '', cbu: '', resolution_status: '', resolution_method: '', provider_status: '' });
     setPage(0);
   };
 
@@ -323,6 +347,18 @@ export default function Movements() {
               </FormControl>
             </Grid>
             <Grid item xs={6} sm={4} md={2}>
+              <FormControl fullWidth size="small">
+                <InputLabel>Estado proveedor</InputLabel>
+                <Select value={filters.provider_status} label="Estado proveedor"
+                  onChange={e => setFilters(p => ({ ...p, provider_status: e.target.value }))}>
+                  <MenuItem value="">Todos</MenuItem>
+                  <MenuItem value="pending">Pendiente</MenuItem>
+                  <MenuItem value="paid">Pagado</MenuItem>
+                  <MenuItem value="rejected">Rechazado</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={6} sm={4} md={2}>
               <TextField size="small" label="COELSA Code" fullWidth
                 value={filters.coelsa_code}
                 onChange={e => setFilters(p => ({ ...p, coelsa_code: e.target.value }))} />
@@ -359,6 +395,8 @@ export default function Movements() {
                 <TableCell sx={hideSm}>Dominio</TableCell>
                 <TableCell>Monto</TableCell>
                 <TableCell sx={hideMd}>Dir.</TableCell>
+                <TableCell sx={hideSm}>HG</TableCell>
+                <TableCell sx={hideSm}>Estado proveedor</TableCell>
                 <TableCell sx={hideLg}>Cuenta</TableCell>
                 <TableCell>Resolución</TableCell>
                 <TableCell sx={hideMd}>Método</TableCell>
@@ -370,12 +408,12 @@ export default function Movements() {
               {loading ? (
                 [...Array(5)].map((_, i) => (
                   <TableRow key={i}>
-                    {[...Array(9)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
+                    {[...Array(11)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
                   </TableRow>
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9}>
+                  <TableCell colSpan={11}>
                     <Box sx={{ py: 6, textAlign: 'center' }}>
                       <Box sx={{
                         width: 52, height: 52, borderRadius: '14px',
@@ -421,6 +459,8 @@ export default function Movements() {
                     {formatAmount(row.amount)}
                   </TableCell>
                   <TableCell sx={{ fontSize: 12, ...hideMd }}><StatusChip status={row.direction} /></TableCell>
+                  <TableCell sx={{ fontSize: 12, ...hideSm }}><StatusChip status={row.status} /></TableCell>
+                  <TableCell sx={{ fontSize: 12, ...hideSm }}><ProviderStatusChip status={row.provider_status} /></TableCell>
                   <TableCell sx={{ fontSize: 11, ...hideLg }}>{row.account_name || '—'}</TableCell>
                   <TableCell>
                     <Stack direction="row" spacing={0.5} alignItems="center">
@@ -544,6 +584,8 @@ export default function Movements() {
                 >
                   <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                     <StatusChip status={detailDialog.direction} />
+                    <StatusChip status={detailDialog.status} />
+                    <ProviderStatusChip status={detailDialog.provider_status} />
                     <ResolutionChip status={detailDialog.resolution_status} />
                     <StatusChip status={detailDialog.delivery_status || (detailDialog.resolution_status === 'unresolved' ? 'unresolved' : 'pending')} />
                     {detailDialog.resolution_status === 'multi_resolved' && (
@@ -608,7 +650,8 @@ export default function Movements() {
                         { label: 'Provider Event ID', value: detailDialog.provider_event_id, copyable: true, mono: true },
                         { label: 'External ID', value: detailDialog.external_id, copyable: true, mono: true },
                         { label: 'COELSA', value: detailDialog.coelsa_code, copyable: true, mono: true },
-                        { label: 'Estado HG', value: detailDialog.status },
+                        { label: 'Estado HG.Cash', value: detailDialog.status },
+                        { label: 'Provider Status', value: PROVIDER_STATUS_LABELS[detailDialog.provider_status] || detailDialog.provider_status || '—' },
                       ].map(field => (
                         <Grid item xs={12} sm={6} key={field.label}>
                           <DetailField {...field} onCopy={copyToClipboard} />
@@ -631,7 +674,6 @@ export default function Movements() {
                         { label: 'Dominios destino', value: parseJsonArray(detailDialog.destination_domains_raw).join(', '), copyable: true },
                         { label: 'Destino raw', value: detailDialog.destination_domain_raw, copyable: true },
                         { label: 'Destino primario', value: detailDialog.domain_hostname, copyable: true },
-                        { label: 'Estado visual', value: RESOLUTION_STATUS_LABELS[detailDialog.resolution_status] || detailDialog.resolution_status },
                         { label: 'Razón no resuelto', value: detailDialog.unresolved_reason },
                       ].map(field => (
                         <Grid item xs={12} sm={6} key={field.label}>

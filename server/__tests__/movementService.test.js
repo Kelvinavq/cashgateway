@@ -4,15 +4,19 @@ jest.mock('../config/database', () => ({
   },
 }));
 
+jest.mock('../services/schemaService', () => ({
+  hasColumn: jest.fn(async () => true),
+}));
+
 const { pool } = require('../config/database');
-const { saveMovement, syncDeliveriesForMovement } = require('../services/movementService');
+const { saveMovement, updateMovement, syncDeliveriesForMovement } = require('../services/movementService');
 
 describe('movementService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  test('persists multi_resolved movements with the primary domain id', async () => {
+  test('persists multi_resolved movements with provider_status separated from payload', async () => {
     pool.query
       .mockResolvedValueOnce([[]])
       .mockResolvedValueOnce([{ insertId: 77 }]);
@@ -44,6 +48,7 @@ describe('movementService', () => {
         gatewayEventId: 'gw-1',
         rawPayload: { id: 'hg-1' },
         destinationDomainsRaw: ['siemprepaga.com', 'betcity.com'],
+        providerStatus: 'paid',
       }
     );
 
@@ -53,6 +58,44 @@ describe('movementService', () => {
     expect(insertCall[1]).toContain('multi_resolved');
     expect(insertCall[1]).toContain('destination_domains');
     expect(insertCall[1]).toContain(11);
+    expect(insertCall[1]).toContain('paid');
+  });
+
+  test('updates provider_status independently from payload.status', async () => {
+    pool.query
+      .mockResolvedValueOnce([[{ id: 10, resolution_status: 'resolved', resolution_method: 'destination_domain', domain_id: 4 }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+    const result = await updateMovement(
+      {
+        id: 'hg-2',
+        amount: '1000',
+        currency: 'ARS',
+        direction: 'Inbound',
+        status: 'done',
+        type: 'inbound',
+        accountId: 'acc-2',
+      },
+      {
+        resolved: true,
+        method: 'destination_domain',
+        resolutionStatus: 'resolved',
+        account: { domain_id: 4 },
+        domains: [{ id: 4, hostname: 'dominio.com', destination_webhook_url: 'https://dest.example/webhook' }],
+      },
+      {
+        providerEventId: 'prov-2',
+        gatewayEventId: 'gw-2',
+        providerStatus: 'rejected',
+        rawPayload: { id: 'hg-2', status: 'done' },
+      }
+    );
+
+    expect(result).toEqual({ duplicate: false, id: 10, updated: true });
+    const updateCall = pool.query.mock.calls[1];
+    expect(updateCall[0]).toContain('UPDATE movements SET');
+    expect(updateCall[0]).toContain('provider_status = COALESCE(?, provider_status)');
+    expect(updateCall[1]).toContain('rejected');
   });
 
   test('syncDeliveriesForMovement deduplicates domains before inserting deliveries', async () => {

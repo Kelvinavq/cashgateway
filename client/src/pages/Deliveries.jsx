@@ -117,30 +117,31 @@ export default function Deliveries() {
       <Card>
         <TableContainer sx={{ overflowX: 'auto' }}>
           <Table size="small" sx={{ minWidth: 480 }}>
-            <TableHead>
-              <TableRow>
-                <TableCell>Estado</TableCell>
-                <TableCell sx={hideSm}>Dominio</TableCell>
-                <TableCell sx={hideMd}>Movimiento</TableCell>
-                <TableCell sx={hideSm}>Monto</TableCell>
-                <TableCell>Intentos</TableCell>
-                <TableCell sx={hideSm}>HTTP</TableCell>
-                <TableCell sx={hideMd}>ACK</TableCell>
-                <TableCell sx={hideMd}>Último Error</TableCell>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Estado</TableCell>
+                    <TableCell sx={hideSm}>Dominio</TableCell>
+                    <TableCell sx={hideMd}>Movimiento</TableCell>
+                    <TableCell sx={hideSm}>Estado proveedor</TableCell>
+                    <TableCell sx={hideSm}>Monto</TableCell>
+                    <TableCell>Intentos</TableCell>
+                    <TableCell sx={hideSm}>HTTP</TableCell>
+                    <TableCell sx={hideMd}>ACK</TableCell>
+                    <TableCell sx={hideMd}>Último Error</TableCell>
                 <TableCell sx={hideSm}>Actualizado</TableCell>
                 <TableCell align="right">Acciones</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {loading ? (
-                [...Array(5)].map((_, i) => (
-                  <TableRow key={i}>
-                    {[...Array(10)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
-                  </TableRow>
-                ))
-              ) : rows.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={10}>
+                  {loading ? (
+                    [...Array(5)].map((_, i) => (
+                      <TableRow key={i}>
+                        {[...Array(11)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
+                      </TableRow>
+                    ))
+                  ) : rows.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={11}>
                     <Box sx={{ py: 6, textAlign: 'center' }}>
                       <Box sx={{
                         width: 52, height: 52, borderRadius: '14px',
@@ -157,10 +158,10 @@ export default function Deliveries() {
                     </Box>
                   </TableCell>
                 </TableRow>
-              ) : rows.map(row => (
-                <TableRow key={row.id} hover sx={row.status === 'dead' ? { bgcolor: 'rgba(71,85,105,0.05)' } : {}}>
-                  <TableCell><StatusChip status={row.status} /></TableCell>
-                  <TableCell sx={{ fontSize: 12, ...hideSm }}>
+                  ) : rows.map(row => (
+                    <TableRow key={row.id} hover sx={row.status === 'dead' ? { bgcolor: 'rgba(71,85,105,0.05)' } : {}}>
+                      <TableCell><StatusChip status={row.status} /></TableCell>
+                      <TableCell sx={{ fontSize: 12, ...hideSm }}>
                     <Stack spacing={0.25}>
                       <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
                         {row.domain_hostname || '—'}
@@ -169,13 +170,16 @@ export default function Deliveries() {
                         {row.domain_name || '—'}
                       </Typography>
                     </Stack>
-                  </TableCell>
-                  <TableCell sx={{ fontSize: 11, fontFamily: 'monospace', ...hideMd }}>
-                    {row.hg_id?.substring(0, 12) || '—'}…
-                  </TableCell>
-                  <TableCell sx={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', ...hideSm }}>
-                    {formatAmount(row.amount)}
-                  </TableCell>
+                      </TableCell>
+                      <TableCell sx={{ fontSize: 11, fontFamily: 'monospace', ...hideMd }}>
+                        {row.hg_id?.substring(0, 12) || '—'}…
+                      </TableCell>
+                      <TableCell sx={{ fontSize: 12, ...hideSm }}>
+                        <StatusChip status={row.provider_status} />
+                      </TableCell>
+                      <TableCell sx={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', ...hideSm }}>
+                        {formatAmount(row.amount)}
+                      </TableCell>
                   <TableCell sx={{ fontWeight: 600 }}>{row.attempts}</TableCell>
                   <TableCell sx={hideSm}>{row.last_http_status || '—'}</TableCell>
                   <TableCell sx={hideMd}>

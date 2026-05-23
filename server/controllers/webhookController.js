@@ -23,6 +23,28 @@ function parseMaybeJson(value) {
   }
 }
 
+const PROVIDER_STATUSES = new Set(['pending', 'paid', 'rejected']);
+
+function normalizeProviderStatus(value) {
+  if (value === null || value === undefined) return null;
+  const normalized = String(value).trim().toLowerCase();
+  return PROVIDER_STATUSES.has(normalized) ? normalized : null;
+}
+
+function extractProviderStatus(wrapper = {}, movementPayload = {}) {
+  return normalizeProviderStatus(
+    wrapper?.provider_status ??
+    movementPayload?.provider_status ??
+    null
+  );
+}
+
+function stripProviderStatusFromObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const { provider_status, ...rest } = value;
+  return rest;
+}
+
 function normalizeWebhookBody(body) {
   if (body?.payload && typeof body.payload === 'object' && body.payload.id) {
     return { wrapper: body, movementPayload: body.payload };
@@ -69,10 +91,12 @@ async function resolveAuth(token, providerTokenHeader, ip) {
 
 async function getMovementWithRelations(movementId) {
   const hasDomainHostname = await hasColumn('domains', 'hostname');
+  const hasProviderStatus = await hasColumn('movements', 'provider_status');
   const [movements] = await pool.query(`
     SELECT m.*,
       d.name AS domain_name,
       ${hasDomainHostname ? 'd.hostname AS domain_hostname' : 'NULL AS domain_hostname'},
+      ${hasProviderStatus ? 'm.provider_status AS provider_status' : 'NULL AS provider_status'},
       a.name AS account_name,
       (SELECT COUNT(*) FROM webhook_deliveries wd WHERE wd.movement_id = m.id) AS delivery_count,
       (SELECT GROUP_CONCAT(DISTINCT ${hasDomainHostname ? 'dom.hostname' : 'dom.base_url'} ORDER BY ${hasDomainHostname ? 'dom.hostname' : 'dom.base_url'} SEPARATOR ', ')
@@ -135,6 +159,7 @@ function buildStoredResolutionResult(existingMovement, domains) {
     unresolvedReason: existingMovement?.unresolved_reason || null,
     destinationDomainRaw: existingMovement?.destination_domain_raw || null,
     destinationDomainsRaw,
+    providerStatus: existingMovement?.provider_status || null,
     diagnostics: {
       rawDestinationDomains: [],
       normalizedDestinationDomains: [],
@@ -180,6 +205,7 @@ async function queueDeliveriesForMovement({ movementId, movement, resolveResult,
             name: d.name,
           })),
           skipped_domain_ids: skipped,
+          provider_status: movement.provider_status || resolveResult?.providerStatus || null,
         },
       });
     }
@@ -214,6 +240,7 @@ function logDestinationResolution({ movement, resolveResult, providerSourceId, r
       name: d.name,
     })) || [],
     domains_missing: resolveResult?.diagnostics?.missingDestinationDomains || [],
+    provider_status: movement.provider_status || resolveResult?.providerStatus || null,
     movement_id: movement.id,
     provider_event_id: movement.provider_event_id,
     gateway_event_id: movement.gateway_event_id,
@@ -310,6 +337,7 @@ async function processPersistedMovement({ movementId, providerSourceId, requestI
         accountId: movementPayload.accountId,
         destination_domain_raw: resolveResult.destinationDomainRaw || null,
         destination_domains_raw: resolveResult.destinationDomainsRaw || null,
+        provider_status: movement.provider_status || resolveResult?.providerStatus || null,
       },
     });
   }
@@ -332,6 +360,7 @@ async function receiveWebhook(req, res, next) {
     const { wrapper, movementPayload } = normalizeWebhookBody(body);
     const providerEventId = wrapper.provider_event_id || movementPayload.provider_event_id || null;
     const receivedByProviderAt = wrapper.received_by_provider_at || movementPayload.received_by_provider_at || null;
+    const providerStatus = extractProviderStatus(wrapper, movementPayload);
 
     if (!movementPayload.id) {
       return res.status(400).json({ success: false, message: 'Payload id is required' });
@@ -346,7 +375,7 @@ async function receiveWebhook(req, res, next) {
         request_id: req.requestId,
         message: error.body.message,
         ip_address: ip,
-        metadata: { token: token.substring(0, 8) },
+        metadata: { token: token.substring(0, 8), provider_status: providerStatus },
       });
       return res.status(error.status).json(error.body);
     }
@@ -366,6 +395,7 @@ async function receiveWebhook(req, res, next) {
         rawPayload: body,
         destinationDomainRaw: resolveResult.destinationDomainRaw,
         destinationDomainsRaw: resolveResult.destinationDomainsRaw,
+        providerStatus,
       }
     );
 
@@ -379,7 +409,7 @@ async function receiveWebhook(req, res, next) {
         movement_id: movementId,
         message: `Duplicate webhook ignored: hg_id=${movementPayload.id}`,
         ip_address: ip,
-        metadata: { hg_id: movementPayload.id, provider_event_id: providerEventId },
+        metadata: { hg_id: movementPayload.id, provider_event_id: providerEventId, provider_status: providerStatus },
       });
       return res.status(200).json({
         success: true,
@@ -438,6 +468,7 @@ async function receiveWebhookUpdate(req, res, next) {
     const { wrapper, movementPayload } = normalizeWebhookBody(body);
     const providerEventId = wrapper.provider_event_id || movementPayload.provider_event_id || null;
     const receivedByProviderAt = wrapper.received_by_provider_at || movementPayload.received_by_provider_at || null;
+    const providerStatus = extractProviderStatus(wrapper, movementPayload);
 
     if (!movementPayload.id && !movementPayload.coelsaCode) {
       return res.status(400).json({ success: false, message: 'Payload id or coelsaCode is required' });
@@ -468,6 +499,7 @@ async function receiveWebhookUpdate(req, res, next) {
         rawPayload: body,
         destinationDomainRaw: resolveResult.destinationDomainRaw,
         destinationDomainsRaw: resolveResult.destinationDomainsRaw,
+        providerStatus,
         preserveResolution: !hints.hasExplicitDestinationHints && !!existingMovement,
       })
       : await saveMovement(movementPayload, resolveResult, {
@@ -478,6 +510,7 @@ async function receiveWebhookUpdate(req, res, next) {
         rawPayload: body,
         destinationDomainRaw: resolveResult.destinationDomainRaw,
         destinationDomainsRaw: resolveResult.destinationDomainsRaw,
+        providerStatus,
       });
 
     const movementId = saveResult.id;
@@ -511,6 +544,7 @@ async function receiveWebhookUpdate(req, res, next) {
               destination_domain_raw: resolveResult.destinationDomainRaw || null,
               destination_domains_raw: resolveResult.destinationDomainsRaw || null,
               resolution_method: resolveResult.method,
+              provider_status: providerStatus,
             },
           });
         }

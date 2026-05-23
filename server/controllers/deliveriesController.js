@@ -11,6 +11,7 @@ async function list(req, res, next) {
     const params = [];
     if (status) { conditions.push('wd.status = ?'); params.push(status); }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const hasProviderStatus = await hasColumn('movements', 'provider_status');
     const hasDomainHostname = await hasColumn('domains', 'hostname');
     const [[{ total }]] = await pool.query(
       `SELECT COUNT(*) AS total FROM webhook_deliveries wd ${where}`,
@@ -18,7 +19,7 @@ async function list(req, res, next) {
     );
     const [rows] = await pool.query(`
       SELECT wd.*, m.hg_id, m.amount, m.currency, m.direction, m.coelsa_code,
-        m.gateway_event_id, d.name AS domain_name,
+        m.gateway_event_id, ${hasProviderStatus ? 'm.provider_status AS provider_status,' : 'NULL AS provider_status,'} d.name AS domain_name,
         ${hasDomainHostname ? 'd.hostname AS domain_hostname' : 'NULL AS domain_hostname'}
       FROM webhook_deliveries wd
       LEFT JOIN movements m ON wd.movement_id = m.id

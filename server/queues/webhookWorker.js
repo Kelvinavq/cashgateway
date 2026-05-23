@@ -75,7 +75,7 @@ const worker = new Worker(
           movement_id: movementId,
           delivery_id: deliveryId,
           message: `Delivery succeeded HTTP ${httpStatus}`,
-          metadata: { httpStatus, ackValid },
+          metadata: { httpStatus, ackValid, provider_status: movement.provider_status || null },
         });
       } else {
         error = `HTTP ${result.response.status}: ${responseBody}`;
@@ -110,7 +110,7 @@ const worker = new Worker(
         ]
       );
 
-      socketService.emit('delivery:updated', { deliveryId, status: newStatus, error });
+      socketService.emit('delivery:updated', { deliveryId, status: newStatus, error, provider_status: movement.provider_status || null });
       await invalidateStatsCache();
 
       const logEntry = {
@@ -122,7 +122,13 @@ const worker = new Worker(
         message: isFinal
           ? `Delivery moved to DLQ after ${MAX_ATTEMPTS} attempts: ${error}`
           : `Delivery attempt ${attemptNumber} failed: ${error}`,
-        metadata: { httpStatus, attempts: attemptNumber, isFinal, isAckError: err.isAckError || false },
+        metadata: {
+          httpStatus,
+          attempts: attemptNumber,
+          isFinal,
+          isAckError: err.isAckError || false,
+          provider_status: movement.provider_status || null,
+        },
       };
       isFinal ? logService.error(logEntry) : logService.warn(logEntry);
 
@@ -130,7 +136,7 @@ const worker = new Worker(
       return; // DLQ — don't rethrow, job is considered "complete" (dead)
     }
 
-    socketService.emit('delivery:updated', { deliveryId, status: 'success', httpStatus, ackValid });
+    socketService.emit('delivery:updated', { deliveryId, status: 'success', httpStatus, ackValid, provider_status: movement.provider_status || null });
     await invalidateStatsCache();
   },
   { connection, attempts: MAX_ATTEMPTS, backoff: { type: 'exponential', delay: 5000 } }

@@ -3,6 +3,43 @@ const { signWebhookPayload } = require('../utils/hmac');
 const { normalizeDomain } = require('../utils/domainNormalizer');
 const logger = require('../utils/logger');
 
+function parseMovementRawPayload(movement) {
+  if (!movement) return null;
+
+  const raw = movement.raw_payload;
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  if (raw && typeof raw === 'object') {
+    return raw;
+  }
+
+  return null;
+}
+
+function stripProviderStatus(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const { provider_status, ...rest } = value;
+  return rest;
+}
+
+function buildForwardBody(movement) {
+  const parsed = parseMovementRawPayload(movement) || {};
+  const payload = Object.prototype.hasOwnProperty.call(parsed, 'payload')
+    ? parsed.payload
+    : stripProviderStatus(parsed);
+
+  return {
+    provider_status: movement.provider_status || null,
+    payload,
+  };
+}
+
 /**
  * Forward a movement to its destination domain.
  *
@@ -17,10 +54,9 @@ const logger = require('../utils/logger');
 async function forwardWebhook(delivery, movement, domain) {
   const timestamp = Math.floor(Date.now() / 1000).toString();
 
-  // Use the stored raw payload string directly — preserves original byte order
-  const rawBody = typeof movement.raw_payload === 'string'
-    ? movement.raw_payload
-    : JSON.stringify(movement.raw_payload);
+  // Forward the normalized envelope while keeping the original HG payload intact
+  const forwardedBody = buildForwardBody(movement);
+  const rawBody = JSON.stringify(forwardedBody);
 
   const headers = {
     'Content-Type':            'application/json',
@@ -44,7 +80,7 @@ async function forwardWebhook(delivery, movement, domain) {
     headers['x-gateway-signature'] = `sha256=${sig}`;
   }
 
-  const response = await axios.post(delivery.destination_url, JSON.parse(rawBody), {
+  const response = await axios.post(delivery.destination_url, forwardedBody, {
     headers,
     timeout: 10000,
     validateStatus: null,

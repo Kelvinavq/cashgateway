@@ -7,6 +7,8 @@ const cfg = {
   pending:           { label: 'Pendiente',        bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b', pulse: true  },
   processing:        { label: 'Procesando',       bg: 'rgba(59,130,246,0.12)',  color: '#3b82f6', pulse: true  },
   done:              { label: 'Completado',       bg: 'rgba(16,185,129,0.12)',  color: '#10b981', pulse: false },
+  paid:              { label: 'Pagado',           bg: 'rgba(16,185,129,0.12)',  color: '#10b981', pulse: false },
+  rejected:          { label: 'Rechazado',        bg: 'rgba(239,68,68,0.12)',   color: '#ef4444', pulse: false },
   Inbound:           { label: 'Entrada',          bg: 'rgba(16,185,129,0.12)',  color: '#10b981', pulse: false },
   Outbound:          { label: 'Salida',           bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b', pulse: false },
   active:            { label: 'Activo',           bg: 'rgba(16,185,129,0.12)',  color: '#10b981', pulse: false },

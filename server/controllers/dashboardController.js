@@ -17,6 +17,7 @@ async function getStats(req, res, next) {
 
     const hasDestinationDomainRaw = await hasColumn('movements', 'destination_domain_raw');
     const hasDestinationDomainsRaw = await hasColumn('movements', 'destination_domains_raw');
+    const hasProviderStatus = await hasColumn('movements', 'provider_status');
     const hasDomainHostname = await hasColumn('domains', 'hostname');
 
     const movementsSelectParts = [
@@ -30,6 +31,9 @@ async function getStats(req, res, next) {
       "SUM(CASE WHEN resolution_method IN ('destination_domain', 'destination_domains') THEN 1 ELSE 0 END) AS destination_domain_resolved_count",
       "SUM(CASE WHEN resolution_status = 'multi_resolved' THEN 1 ELSE 0 END) AS multi_destination_count",
       "SUM(CASE WHEN resolution_status = 'unresolved' AND unresolved_reason LIKE 'Invalid destination domain%' THEN 1 ELSE 0 END) AS unresolved_invalid_domain_count",
+      hasProviderStatus ? "SUM(CASE WHEN provider_status = 'pending' THEN 1 ELSE 0 END) AS provider_pending_count" : '0 AS provider_pending_count',
+      hasProviderStatus ? "SUM(CASE WHEN provider_status = 'paid' THEN 1 ELSE 0 END) AS provider_paid_count" : '0 AS provider_paid_count',
+      hasProviderStatus ? "SUM(CASE WHEN provider_status = 'rejected' THEN 1 ELSE 0 END) AS provider_rejected_count" : '0 AS provider_rejected_count',
     ];
 
     const movementRawSelectParts = [
@@ -39,6 +43,7 @@ async function getStats(req, res, next) {
       'm.currency',
       'm.direction',
       'm.status',
+      hasProviderStatus ? 'm.provider_status' : 'NULL AS provider_status',
       'm.from_name',
       'm.to_name',
       'm.coelsa_code',
@@ -129,6 +134,9 @@ async function getStats(req, res, next) {
         destination_domain_resolved: parseInt(movStats.destination_domain_resolved_count) || 0,
         multi_destination:  parseInt(movStats.multi_destination_count) || 0,
         unresolved_invalid_domain: parseInt(movStats.unresolved_invalid_domain_count) || 0,
+        provider_pending: parseInt(movStats.provider_pending_count) || 0,
+        provider_paid: parseInt(movStats.provider_paid_count) || 0,
+        provider_rejected: parseInt(movStats.provider_rejected_count) || 0,
       },
       deliveries: {
         success:          parseInt(delStats.delivered_ok)     || 0,

@@ -15,6 +15,12 @@ Proveedor Externo → [Este Gateway] → Dominio/Proyecto Final
 
 El proveedor externo reenvía los webhooks de todas las cuentas HG.Cash a este gateway. El gateway autentica al proveedor por token (con verificación de IP), resuelve primero por `destination_domains[]`, luego `destination_domain`, luego `domain`, y si no hay destino explícito aplica el fallback por `accountId` → `toCBU` → `toCUIT`. Después registra el movimiento y reenvía al dominio correspondiente firmando el payload con HMAC. Los movimientos no resueltos quedan pendientes de asignación manual.
 
+Regla de estados:
+
+- `payload.status` o `hg_status` o `bank_status` representa el estado bancario/HG.Cash y se mantiene intacto dentro del payload.
+- `provider_status` representa el estado comercial del proveedor y siempre viaja fuera del payload.
+- Nunca se mezcla `provider_status` con `payload.status`.
+
 ## Producción recomendada
 
 - Panel/admin: `https://admin.flowhg.online`
@@ -137,6 +143,9 @@ mysql -u root -p hgcash_gateway < migration_v3.sql
 
 # Migración v4: multi-destino por hostname
 mysql -u root -p hgcash_gateway < migration_v4.sql
+
+# Migración v5: provider_status separado del payload HG.Cash
+mysql -u root -p hgcash_gateway < migration_v5.sql
 ```
 
 Seed data incluido:
@@ -312,6 +321,7 @@ POST /api/webhooks/provider/hgcash/:token/update   # Update de movimiento existe
    b. Fallback: busca en hgcash_accounts.gateway_token (legado)
 4. Verificación de IP whitelist (si configurada, soporta CIDR)
 5. Normaliza payload: acepta {provider_event_id, payload} o payload plano
+   - `provider_status`, si viene, se lee siempre desde el body principal y nunca desde `payload.status`
 6. Genera gateway_event_id (UUID único)
 7. Deduplicación: rechaza si hg_id o provider_event_id ya existen
 8. Detecta destinos explícitos en este orden: destination_domains[] → destination_domain → domain
@@ -520,6 +530,15 @@ Los logs son visibles en la página **Logs** del panel con filtros por nivel, so
 
 ## Headers enviados al dominio destino
 
+El body reenviado al dominio final mantiene el payload HG.Cash intacto y agrega `provider_status` fuera del payload:
+
+```json
+{
+  "provider_status": "paid",
+  "payload": { "... payload original HG.Cash ..." }
+}
+```
+
 | Header | Valor |
 |--------|-------|
 | `Content-Type` | `application/json` |
@@ -531,6 +550,9 @@ Los logs son visibles en la página **Logs** del panel con filtros por nivel, so
 | `x-hg-account-id` | `accountId` del payload original |
 | `x-hg-account-db-id` | ID de la cuenta en la DB del gateway |
 | `x-domain-id` | ID del dominio en la DB del gateway |
+| `x-destination-domain` | Hostname del dominio destino |
+| `x-destination-domain-id` | ID del dominio destino |
+| `x-destination-domain-name` | Nombre del dominio destino |
 | `x-coelsa-code` | Código COELSA del movimiento |
 | `x-gateway-timestamp` | Unix timestamp de la entrega (usado en firma HMAC) |
 | `x-gateway-signature` | `sha256=<HMAC>` — solo si el dominio tiene secreto configurado |
@@ -580,6 +602,7 @@ curl -X POST https://tu-gateway/api/webhooks/provider/hgcash/TOKEN_DEL_PROVEEDOR
   -d '{
     "provider_event_id": "prov_abc_123",
     "received_by_provider_at": "2026-05-16T14:36:59-03:00",
+    "provider_status": "paid",
     "payload": {
       "id": "b1642cbc-9458-4f08-aae2-72c285783fda",
       "amount": "1000",
@@ -623,6 +646,7 @@ El proveedor puede enviar un dominio único:
 ```json
 {
   "provider_event_id": "prov_001",
+  "provider_status": "paid",
   "destination_domain": "siemprepaga.com",
   "payload": {}
 }
@@ -633,6 +657,7 @@ O varios dominios:
 ```json
 {
   "provider_event_id": "prov_001",
+  "provider_status": "pending",
   "destination_domains": ["siemprepaga.com", "betcity.com"],
   "payload": {}
 }
@@ -654,6 +679,7 @@ Notas:
 
 - `destination_domains[]` se normaliza a hostname y elimina duplicados
 - `destination_domain` y `domain` se tratan como hostnames individuales
+- `provider_status` es externo al payload HG.Cash y nunca pisa `payload.status`
 - Si llega un dominio inválido, se registra en `system_logs` con `invalid_destination_domain`
 - Si llegan varios dominios válidos, se crea un delivery por cada uno
 - No se crean deliveries duplicados para el mismo `movement_id + domain_id`
@@ -665,6 +691,7 @@ curl -X POST https://tu-gateway/api/webhooks/provider/hgcash/TOKEN_DEL_PROVEEDOR
   -H "Content-Type: application/json" \
   -d '{
     "provider_event_id": "prov_001",
+    "provider_status": "rejected",
     "destination_domains": ["siemprepaga.com", "betcity.com"],
     "payload": {
       "id": "b1642cbc-9458-4f08-aae2-72c285783fda",
@@ -680,6 +707,7 @@ curl -X POST https://tu-gateway/api/webhooks/provider/hgcash/TOKEN_DEL_PROVEEDOR
 ```powershell
 $body = @{
   provider_event_id = 'prov_001'
+  provider_status = 'paid'
   destination_domain = 'siemprepaga.com'
   payload = @{
     id = 'b1642cbc-9458-4f08-aae2-72c285783fda'

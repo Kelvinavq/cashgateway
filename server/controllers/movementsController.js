@@ -18,6 +18,7 @@ async function list(req, res, next) {
       delivery_status,
       resolution_status,
       resolution_method,
+      provider_status,
       coelsa_code,
       cuit,
       cbu,
@@ -30,6 +31,7 @@ async function list(req, res, next) {
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const conditions = [];
     const params = [];
+    const hasProviderStatus = await hasColumn('movements', 'provider_status');
 
     if (domain_id)          { conditions.push('m.domain_id = ?');                                 params.push(domain_id); }
     if (hgcash_account_id)  { conditions.push('m.hgcash_account_id = ?');                         params.push(hgcash_account_id); }
@@ -37,6 +39,7 @@ async function list(req, res, next) {
     if (direction)          { conditions.push('m.direction = ?');                                  params.push(direction); }
     if (resolution_status)  { conditions.push('m.resolution_status = ?');                         params.push(resolution_status); }
     if (resolution_method)  { conditions.push('m.resolution_method = ?');                         params.push(resolution_method); }
+    if (provider_status && hasProviderStatus) { conditions.push('m.provider_status = ?');         params.push(provider_status); }
     if (coelsa_code)        { conditions.push('m.coelsa_code LIKE ?');                            params.push(`%${coelsa_code}%`); }
     if (cuit)               { conditions.push('(m.from_cuit = ? OR m.to_cuit = ?)');              params.push(cuit, cuit); }
     if (cbu)                { conditions.push('(m.from_cbu = ? OR m.to_cbu = ?)');                params.push(cbu, cbu); }
@@ -63,6 +66,7 @@ async function list(req, res, next) {
       'm.id', 'm.provider_event_id', 'm.gateway_event_id', 'm.hg_id', 'm.external_id',
       'm.account_id', 'm.hgcash_account_id', 'm.domain_id',
       'm.amount', 'm.currency', 'm.direction', 'm.status', 'm.type', 'm.movement_date', 'm.timezone',
+      hasProviderStatus ? 'm.provider_status' : 'NULL AS provider_status',
       'm.from_name', 'm.to_name', 'm.from_cbu', 'm.to_cbu', 'm.from_cuit', 'm.to_cuit',
       'm.coelsa_code',
       'm.resolution_status', 'm.resolution_method', 'm.unresolved_reason',
@@ -115,6 +119,7 @@ async function getById(req, res, next) {
     const { id } = req.params;
     const hasDestinationDomainRaw = await hasColumn('movements', 'destination_domain_raw');
     const hasDestinationDomainsRaw = await hasColumn('movements', 'destination_domains_raw');
+    const hasProviderStatus = await hasColumn('movements', 'provider_status');
     const hasDomainHostname = await hasColumn('domains', 'hostname');
 
     const selectParts = [
@@ -208,7 +213,7 @@ async function resolve(req, res, next) {
       [account.id, account.domain_id, id]
     );
 
-    const { created } = await syncDeliveriesForMovement(id, [account]);
+    const { created } = await syncDeliveriesForMovement(id, [account], movement.provider_status || null);
     for (const item of created) {
       await webhookQueue.add(
         'forward',
