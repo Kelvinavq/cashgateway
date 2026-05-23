@@ -3,10 +3,10 @@ import {
   Box, Card, CardContent, Typography, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, TablePagination, IconButton, Tooltip, TextField,
   Select, MenuItem, FormControl, InputLabel, Grid, Button, Dialog, DialogTitle,
-  DialogContent, DialogActions, Skeleton, Stack, Chip, useMediaQuery, useTheme,
+  DialogContent, DialogActions, Skeleton, Stack, Chip, Paper, Divider, useMediaQuery, useTheme,
   Autocomplete,
 } from '@mui/material';
-import { Visibility, Refresh, Code, History, BuildCircle, WarningAmber } from '@mui/icons-material';
+import { Visibility, Refresh, Code, History, BuildCircle, WarningAmber, SwapHoriz, ContentCopy, Close } from '@mui/icons-material';
 import api from '../lib/api';
 import StatusChip from '../components/StatusChip';
 import { useSocket } from '../hooks/useSocket';
@@ -16,7 +16,7 @@ function formatAmount(n) {
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 0 }).format(n || 0);
 }
 function formatDate(d) {
-  if (!d) return '—';
+  if (!d) return 'â€”';
   return new Date(d).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' });
 }
 
@@ -34,18 +34,87 @@ const RESOLUTION_METHOD_LABELS = {
 };
 
 function ResolutionChip({ status }) {
-  const colorMap = {
-    resolved: 'success',
-    unresolved: 'error',
-    manually_resolved: 'warning',
-  };
+  const colorMap = { resolved: 'success', unresolved: 'error', manually_resolved: 'warning' };
   return (
     <Chip
-      label={RESOLUTION_STATUS_LABELS[status] || status || '—'}
+      label={RESOLUTION_STATUS_LABELS[status] || status || 'â€”'}
       color={colorMap[status] || 'default'}
       size="small"
       sx={{ fontSize: 11, height: 20 }}
     />
+  );
+}
+
+function DetailField({ label, value, mono = false, copyable = false, onCopy }) {
+  const displayValue = value === undefined || value === null || value === '' ? 'â€”' : value;
+  const canCopy = copyable && displayValue !== 'â€”';
+
+  return (
+    <Box
+      sx={{
+        p: 1.5,
+        borderRadius: 2,
+        border: '1px solid',
+        borderColor: 'rgba(148,163,184,0.16)',
+        bgcolor: 'rgba(15,23,42,0.24)',
+        minHeight: '100%',
+      }}
+    >
+      <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+            {label}
+          </Typography>
+          <Typography
+            variant="body2"
+            fontWeight={600}
+            sx={{
+              wordBreak: 'break-word',
+              lineHeight: 1.45,
+              fontFamily: mono ? 'monospace' : 'inherit',
+              color: displayValue === 'â€”' ? 'text.disabled' : 'text.primary',
+            }}
+          >
+            {displayValue}
+          </Typography>
+        </Box>
+        {canCopy && (
+          <Tooltip title="Copiar">
+            <IconButton size="small" onClick={() => onCopy(displayValue, label)} sx={{ mt: -0.25, flexShrink: 0 }}>
+              <ContentCopy sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+      </Stack>
+    </Box>
+  );
+}
+
+function DetailSection({ title, subtitle, children }) {
+  return (
+    <Paper
+      elevation={0}
+      sx={{
+        p: { xs: 1.5, sm: 2 },
+        borderRadius: 3,
+        border: '1px solid',
+        borderColor: 'rgba(148,163,184,0.14)',
+        bgcolor: 'rgba(2,6,23,0.35)',
+        backdropFilter: 'blur(12px)',
+      }}
+    >
+      <Stack spacing={0.5} sx={{ mb: 1.5 }}>
+        <Typography variant="subtitle2" fontWeight={700}>
+          {title}
+        </Typography>
+        {subtitle && (
+          <Typography variant="caption" color="text.secondary">
+            {subtitle}
+          </Typography>
+        )}
+      </Stack>
+      {children}
+    </Paper>
   );
 }
 
@@ -68,11 +137,20 @@ export default function Movements() {
   const [deliveriesDialog, setDeliveriesDialog] = useState(null);
   const [deliveries, setDeliveries] = useState([]);
 
-  // Manual resolve modal
   const [resolveDialog, setResolveDialog] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [selectedAccount, setSelectedAccount] = useState(null);
   const [resolving, setResolving] = useState(false);
+
+  const copyToClipboard = async (value, label = 'Dato') => {
+    if (value === undefined || value === null || value === '') return;
+    try {
+      await navigator.clipboard.writeText(String(value));
+      toast.success(`${label} copiado`);
+    } catch {
+      toast.error('No se pudo copiar');
+    }
+  };
 
   const fetchMovements = useCallback(async () => {
     setLoading(true);
@@ -92,7 +170,19 @@ export default function Movements() {
     }
   }, [page, rowsPerPage, filters]);
 
-  useEffect(() => { fetchMovements(); }, [fetchMovements]);
+  useEffect(() => {
+    let mounted = true;
+
+    (async () => {
+      if (mounted) {
+        await fetchMovements();
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [fetchMovements]);
 
   useSocket({
     'movement:new': fetchMovements,
@@ -136,16 +226,11 @@ export default function Movements() {
   };
 
   const handleResolve = async () => {
-    if (!selectedAccount) {
-      toast.error('Seleccioná una cuenta HG.Cash');
-      return;
-    }
+    if (!selectedAccount) { toast.error('SeleccionÃ¡ una cuenta HG.Cash'); return; }
     setResolving(true);
     try {
-      await api.post(`/movements/${resolveDialog.id}/resolve`, {
-        hgcash_account_id: selectedAccount.id,
-      });
-      toast.success('Movimiento resuelto y reenvío encolado');
+      await api.post(`/movements/${resolveDialog.id}/resolve`, { hgcash_account_id: selectedAccount.id });
+      toast.success('Movimiento resuelto y reenvÃ­o encolado');
       setResolveDialog(null);
       setSelectedAccount(null);
       fetchMovements();
@@ -167,7 +252,17 @@ export default function Movements() {
 
   return (
     <Box>
-      <Typography variant="h5" fontWeight={700} gutterBottom>Movimientos</Typography>
+      {/* Page Header */}
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h5" fontWeight={700}>Movimientos</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+          Historial de transacciones en tiempo real
+        </Typography>
+        <Box sx={{
+          height: '1px', mt: 1.5,
+          background: 'linear-gradient(90deg, rgba(99,102,241,0.55), rgba(139,92,246,0.25) 40%, transparent 75%)',
+        }} />
+      </Box>
 
       {/* Filters */}
       <Card sx={{ mb: 2 }}>
@@ -175,8 +270,8 @@ export default function Movements() {
           <Grid container spacing={1.5} alignItems="center">
             <Grid item xs={6} sm={4} md={2}>
               <FormControl fullWidth size="small">
-                <InputLabel>Dirección</InputLabel>
-                <Select value={filters.direction} label="Dirección"
+                <InputLabel>DirecciÃ³n</InputLabel>
+                <Select value={filters.direction} label="DirecciÃ³n"
                   onChange={e => setFilters(p => ({ ...p, direction: e.target.value }))}>
                   <MenuItem value="">Todas</MenuItem>
                   <MenuItem value="Inbound">Inbound</MenuItem>
@@ -186,8 +281,8 @@ export default function Movements() {
             </Grid>
             <Grid item xs={6} sm={4} md={2}>
               <FormControl fullWidth size="small">
-                <InputLabel>Resolución</InputLabel>
-                <Select value={filters.resolution_status} label="Resolución"
+                <InputLabel>ResoluciÃ³n</InputLabel>
+                <Select value={filters.resolution_status} label="ResoluciÃ³n"
                   onChange={e => setFilters(p => ({ ...p, resolution_status: e.target.value }))}>
                   <MenuItem value="">Todas</MenuItem>
                   <MenuItem value="resolved">Resuelto</MenuItem>
@@ -198,8 +293,8 @@ export default function Movements() {
             </Grid>
             <Grid item xs={6} sm={4} md={2}>
               <FormControl fullWidth size="small">
-                <InputLabel>Método</InputLabel>
-                <Select value={filters.resolution_method} label="Método"
+                <InputLabel>MÃ©todo</InputLabel>
+                <Select value={filters.resolution_method} label="MÃ©todo"
                   onChange={e => setFilters(p => ({ ...p, resolution_method: e.target.value }))}>
                   <MenuItem value="">Todos</MenuItem>
                   <MenuItem value="account_id">Account ID</MenuItem>
@@ -237,6 +332,7 @@ export default function Movements() {
         </CardContent>
       </Card>
 
+      {/* Table */}
       <Card>
         <TableContainer sx={{ overflowX: 'auto' }}>
           <Table size="small" sx={{ minWidth: 480 }}>
@@ -247,10 +343,10 @@ export default function Movements() {
                 <TableCell>Monto</TableCell>
                 <TableCell sx={hideMd}>Dir.</TableCell>
                 <TableCell sx={hideLg}>Cuenta</TableCell>
-                <TableCell>Resolución</TableCell>
-                <TableCell sx={hideMd}>Método</TableCell>
+                <TableCell>ResoluciÃ³n</TableCell>
+                <TableCell sx={hideMd}>MÃ©todo</TableCell>
                 <TableCell sx={hideSm}>Entrega</TableCell>
-                <TableCell align="right">Acc.</TableCell>
+                <TableCell align="right">Acciones</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -262,32 +358,51 @@ export default function Movements() {
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                    No se encontraron movimientos
+                  <TableCell colSpan={9}>
+                    <Box sx={{ py: 6, textAlign: 'center' }}>
+                      <Box sx={{
+                        width: 52, height: 52, borderRadius: '14px',
+                        background: 'linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.08))',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        mx: 'auto', mb: 2,
+                      }}>
+                        <SwapHoriz sx={{ fontSize: 26, color: 'primary.light', opacity: 0.7 }} />
+                      </Box>
+                      <Typography variant="body2" fontWeight={600} color="text.secondary">
+                        No se encontraron movimientos
+                      </Typography>
+                      <Typography variant="caption" color="text.disabled">
+                        AjustÃ¡ los filtros o esperÃ¡ nuevas transacciones
+                      </Typography>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ) : rows.map(row => (
                 <TableRow key={row.id} hover
                   sx={row.resolution_status === 'unresolved' ? { bgcolor: 'rgba(239,68,68,0.04)' } : {}}>
-                  <TableCell sx={{ fontSize: 12, whiteSpace: 'nowrap' }}>{formatDate(row.received_at)}</TableCell>
-                  <TableCell sx={{ fontSize: 12, ...hideSm }}>{row.domain_name || '—'}</TableCell>
-                  <TableCell sx={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>{formatAmount(row.amount)}</TableCell>
+                  <TableCell sx={{ fontSize: 12, whiteSpace: 'nowrap', color: 'text.secondary' }}>
+                    {formatDate(row.received_at)}
+                  </TableCell>
+                  <TableCell sx={{ fontSize: 12, ...hideSm }}>{row.domain_name || 'â€”'}</TableCell>
+                  <TableCell sx={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                    {formatAmount(row.amount)}
+                  </TableCell>
                   <TableCell sx={{ fontSize: 12, ...hideMd }}><StatusChip status={row.direction} /></TableCell>
-                  <TableCell sx={{ fontSize: 11, ...hideLg }}>{row.account_name || '—'}</TableCell>
+                  <TableCell sx={{ fontSize: 11, ...hideLg }}>{row.account_name || 'â€”'}</TableCell>
                   <TableCell>
                     <Stack direction="row" spacing={0.5} alignItems="center">
                       <ResolutionChip status={row.resolution_status} />
                       {row.resolution_status === 'unresolved' && (
-                        <Tooltip title={row.unresolved_reason || 'Sin razón'}>
+                        <Tooltip title={row.unresolved_reason || 'Sin razÃ³n'}>
                           <WarningAmber sx={{ fontSize: 14, color: 'error.main', cursor: 'help' }} />
                         </Tooltip>
                       )}
                     </Stack>
                   </TableCell>
                   <TableCell sx={{ fontSize: 11, ...hideMd }}>
-                    {RESOLUTION_METHOD_LABELS[row.resolution_method] || '—'}
+                    {RESOLUTION_METHOD_LABELS[row.resolution_method] || 'â€”'}
                   </TableCell>
-                  <TableCell sx={{ ...hideSm }}>
+                  <TableCell sx={hideSm}>
                     <StatusChip status={row.delivery_status || (row.resolution_status === 'unresolved' ? 'unresolved' : 'pending')} />
                   </TableCell>
                   <TableCell align="right" sx={{ px: 0.5 }}>
@@ -329,64 +444,231 @@ export default function Movements() {
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={e => { setRowsPerPage(parseInt(e.target.value)); setPage(0); }}
           rowsPerPageOptions={[10, 20, 50]}
-          labelRowsPerPage={isMobile ? '' : 'Por página:'}
+          labelRowsPerPage={isMobile ? '' : 'Por pÃ¡gina:'}
         />
       </Card>
 
       {/* Detail Dialog */}
-      <Dialog open={!!detailDialog} onClose={() => setDetailDialog(null)} maxWidth="sm" fullWidth fullScreen={isMobile}>
-        <DialogTitle>Detalle de Movimiento</DialogTitle>
-        <DialogContent dividers>
+      <Dialog
+        open={!!detailDialog}
+        onClose={() => setDetailDialog(null)}
+        maxWidth="lg"
+        fullWidth
+        fullScreen={isMobile}
+        PaperProps={{
+          sx: {
+            borderRadius: { xs: 0, sm: 3 },
+            overflow: 'hidden',
+            background: 'linear-gradient(180deg, rgba(15,23,42,0.96) 0%, rgba(2,6,23,0.98) 100%)',
+            border: '1px solid rgba(148,163,184,0.16)',
+          },
+        }}
+      >
+        <DialogTitle
+          sx={{
+            p: { xs: 2, sm: 2.5 },
+            borderBottom: '1px solid rgba(148,163,184,0.12)',
+            background: 'linear-gradient(135deg, rgba(99,102,241,0.18), rgba(14,165,233,0.08) 45%, transparent 100%)',
+          }}
+        >
           {detailDialog && (
-            <Grid container spacing={2}>
-              {[
-                ['Gateway Event ID', detailDialog.gateway_event_id],
-                ['Provider Event ID', detailDialog.provider_event_id],
-                ['ID HG', detailDialog.hg_id],
-                ['External ID', detailDialog.external_id],
-                ['Account ID recibido', detailDialog.account_id],
-                ['Cuenta HG', detailDialog.account_name],
-                ['Dominio resuelto', detailDialog.domain_name],
-                ['Estado resolución', RESOLUTION_STATUS_LABELS[detailDialog.resolution_status] || detailDialog.resolution_status],
-                ['Método resolución', RESOLUTION_METHOD_LABELS[detailDialog.resolution_method] || detailDialog.resolution_method],
-                ['Razón no resuelto', detailDialog.unresolved_reason],
-                ['Monto', formatAmount(detailDialog.amount)],
-                ['Moneda', detailDialog.currency],
-                ['Dirección', detailDialog.direction],
-                ['Estado HG', detailDialog.status],
-                ['Tipo', detailDialog.type],
-                ['De', detailDialog.from_name],
-                ['De CUIT', detailDialog.from_cuit],
-                ['De CBU', detailDialog.from_cbu],
-                ['Para', detailDialog.to_name],
-                ['Para CUIT', detailDialog.to_cuit],
-                ['Para CBU', detailDialog.to_cbu],
-                ['COELSA', detailDialog.coelsa_code],
-                ['Recibido', formatDate(detailDialog.received_at)],
-                ['Reenviado', formatDate(detailDialog.forwarded_to_domain_at)],
-              ].map(([label, val]) => (
-                <Grid item xs={6} key={label}>
-                  <Typography variant="caption" color="text.secondary" display="block">{label}</Typography>
-                  <Typography variant="body2" fontWeight={500} sx={{ wordBreak: 'break-all' }}>{val || '—'}</Typography>
+            <Stack direction="row" spacing={2} alignItems="flex-start" justifyContent="space-between">
+              <Box sx={{ minWidth: 0 }}>
+                <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: '0.12em' }}>
+                  Detalle de movimiento
+                </Typography>
+                <Typography variant="h6" fontWeight={800} sx={{ lineHeight: 1.15, mt: 0.25 }}>
+                  {detailDialog.hg_id || detailDialog.gateway_event_id || 'Movimiento'}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
+                  Recibido {formatDate(detailDialog.received_at)} · Monto {formatAmount(detailDialog.amount)}
+                </Typography>
+              </Box>
+              <IconButton onClick={() => setDetailDialog(null)} sx={{ mt: -0.5 }}>
+                <Close />
+              </IconButton>
+            </Stack>
+          )}
+        </DialogTitle>
+        <DialogContent sx={{ p: { xs: 2, sm: 2.5 }, bgcolor: 'rgba(2,6,23,0.72)' }}>
+          {detailDialog && (
+            <Stack spacing={2}>
+              <Paper
+                elevation={0}
+                sx={{
+                  p: { xs: 1.5, sm: 2 },
+                  borderRadius: 3,
+                  border: '1px solid rgba(148,163,184,0.14)',
+                  bgcolor: 'rgba(15,23,42,0.42)',
+                }}
+              >
+                <Stack
+                  direction={{ xs: 'column', sm: 'row' }}
+                  spacing={1.5}
+                  alignItems={{ xs: 'stretch', sm: 'center' }}
+                  justifyContent="space-between"
+                  sx={{ mb: 1.5 }}
+                >
+                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                    <StatusChip status={detailDialog.direction} />
+                    <ResolutionChip status={detailDialog.resolution_status} />
+                    <StatusChip status={detailDialog.delivery_status || (detailDialog.resolution_status === 'unresolved' ? 'unresolved' : 'pending')} />
+                  </Stack>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<ContentCopy />}
+                    onClick={() => copyToClipboard([
+                      `HG ID: ${detailDialog.hg_id || '—'}`,
+                      `Gateway Event ID: ${detailDialog.gateway_event_id || '—'}`,
+                      `Provider Event ID: ${detailDialog.provider_event_id || '—'}`,
+                      `External ID: ${detailDialog.external_id || '—'}`,
+                    ].join('\n'), 'Claves')}
+                  >
+                    Copiar claves
+                  </Button>
+                </Stack>
+                <Grid container spacing={1.5}>
+                  <Grid item xs={12} md={4}>
+                    <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.22)' }}>
+                      <Typography variant="caption" color="text.secondary" display="block">Monto</Typography>
+                      <Typography variant="h5" fontWeight={800} sx={{ mt: 0.25 }}>
+                        {formatAmount(detailDialog.amount)}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {detailDialog.currency || '—'} · {detailDialog.type || '—'}
+                      </Typography>
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <DetailField
+                      label="Cuenta HG"
+                      value={detailDialog.account_name}
+                      copyable
+                      onCopy={copyToClipboard}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <DetailField
+                      label="Dominio resuelto"
+                      value={detailDialog.domain_name}
+                      copyable
+                      onCopy={copyToClipboard}
+                    />
+                  </Grid>
                 </Grid>
-              ))}
-            </Grid>
+              </Paper>
+
+              <Grid container spacing={2}>
+                <Grid item xs={12} lg={6}>
+                  <DetailSection title="Identificación" subtitle="Datos clave para soporte, trazabilidad y debugging.">
+                    <Grid container spacing={1.5}>
+                      {[
+                        { label: 'HG ID', value: detailDialog.hg_id, copyable: true, mono: true },
+                        { label: 'Gateway Event ID', value: detailDialog.gateway_event_id, copyable: true, mono: true },
+                        { label: 'Provider Event ID', value: detailDialog.provider_event_id, copyable: true, mono: true },
+                        { label: 'External ID', value: detailDialog.external_id, copyable: true, mono: true },
+                        { label: 'COELSA', value: detailDialog.coelsa_code, copyable: true, mono: true },
+                        { label: 'Estado HG', value: detailDialog.status },
+                      ].map(field => (
+                        <Grid item xs={12} sm={6} key={field.label}>
+                          <DetailField {...field} onCopy={copyToClipboard} />
+                        </Grid>
+                      ))}
+                    </Grid>
+                  </DetailSection>
+                </Grid>
+
+                <Grid item xs={12} lg={6}>
+                  <DetailSection title="Resolución" subtitle="Cómo se resolvió y por qué, si quedó en estado pendiente.">
+                    <Grid container spacing={1.5}>
+                      {[
+                        { label: 'Estado resolución', value: RESOLUTION_STATUS_LABELS[detailDialog.resolution_status] || detailDialog.resolution_status },
+                        { label: 'Método resolución', value: RESOLUTION_METHOD_LABELS[detailDialog.resolution_method] || detailDialog.resolution_method },
+                        { label: 'Account ID recibido', value: detailDialog.account_id, copyable: true, mono: true },
+                        { label: 'Cuenta HG', value: detailDialog.account_name, copyable: true },
+                        { label: 'Dominio resuelto', value: detailDialog.domain_name, copyable: true },
+                        { label: 'Razón no resuelto', value: detailDialog.unresolved_reason },
+                      ].map(field => (
+                        <Grid item xs={12} sm={6} key={field.label}>
+                          <DetailField {...field} onCopy={copyToClipboard} />
+                        </Grid>
+                      ))}
+                    </Grid>
+                  </DetailSection>
+                </Grid>
+
+                <Grid item xs={12} lg={6}>
+                  <DetailSection title="Origen" subtitle="Información del emisor o cuenta origen.">
+                    <Grid container spacing={1.5}>
+                      {[
+                        { label: 'Nombre', value: detailDialog.from_name },
+                        { label: 'CUIT', value: detailDialog.from_cuit, copyable: true, mono: true },
+                        { label: 'CBU', value: detailDialog.from_cbu, copyable: true, mono: true },
+                      ].map(field => (
+                        <Grid item xs={12} sm={4} key={field.label}>
+                          <DetailField {...field} onCopy={copyToClipboard} />
+                        </Grid>
+                      ))}
+                    </Grid>
+                  </DetailSection>
+                </Grid>
+
+                <Grid item xs={12} lg={6}>
+                  <DetailSection title="Destino" subtitle="Datos de la contraparte o cuenta destino.">
+                    <Grid container spacing={1.5}>
+                      {[
+                        { label: 'Nombre', value: detailDialog.to_name },
+                        { label: 'CUIT', value: detailDialog.to_cuit, copyable: true, mono: true },
+                        { label: 'CBU', value: detailDialog.to_cbu, copyable: true, mono: true },
+                      ].map(field => (
+                        <Grid item xs={12} sm={4} key={field.label}>
+                          <DetailField {...field} onCopy={copyToClipboard} />
+                        </Grid>
+                      ))}
+                    </Grid>
+                  </DetailSection>
+                </Grid>
+
+                <Grid item xs={12}>
+                  <DetailSection title="Tiempos y flujo" subtitle="Cuándo ingresó y cuándo se reenviaron los datos.">
+                    <Grid container spacing={1.5}>
+                      {[
+                        { label: 'Dirección', value: detailDialog.direction },
+                        { label: 'Recibido', value: formatDate(detailDialog.received_at) },
+                        { label: 'Reenviado', value: formatDate(detailDialog.forwarded_to_domain_at) },
+                        { label: 'Moneda', value: detailDialog.currency },
+                      ].map(field => (
+                        <Grid item xs={12} sm={6} md={3} key={field.label}>
+                          <DetailField {...field} onCopy={copyToClipboard} />
+                        </Grid>
+                      ))}
+                    </Grid>
+                  </DetailSection>
+                </Grid>
+              </Grid>
+            </Stack>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDetailDialog(null)}>Cerrar</Button>
+        <Divider sx={{ borderColor: 'rgba(148,163,184,0.12)' }} />
+        <DialogActions sx={{ px: { xs: 2, sm: 2.5 }, py: 1.5, bgcolor: 'rgba(2,6,23,0.8)' }}>
+          <Button onClick={() => setDetailDialog(null)} variant="outlined">
+            Cerrar
+          </Button>
         </DialogActions>
       </Dialog>
-
       {/* JSON Dialog */}
       <Dialog open={!!jsonDialog} onClose={() => setJsonDialog(null)} maxWidth="md" fullWidth fullScreen={isMobile}>
         <DialogTitle>Payload Raw (JSON)</DialogTitle>
         <DialogContent dividers>
           <Box component="pre" sx={{
-            bgcolor: 'background.default', borderRadius: 2, p: 2,
+            bgcolor: 'rgba(0,0,0,0.3)',
+            border: '1px solid rgba(99,102,241,0.15)',
+            borderRadius: 2, p: 2,
             fontSize: { xs: 11, sm: 12 }, overflow: 'auto',
             maxHeight: { xs: 'calc(100vh - 200px)', sm: 500 },
             fontFamily: 'monospace', m: 0,
+            color: '#a5b4fc',
           }}>
             {jsonDialog ? JSON.stringify(jsonDialog.raw_payload, null, 2) : ''}
           </Box>
@@ -421,10 +703,10 @@ export default function Movements() {
                     <TableRow key={d.id}>
                       <TableCell><StatusChip status={d.status} /></TableCell>
                       <TableCell>{d.attempts}</TableCell>
-                      <TableCell>{d.last_http_status || '—'}</TableCell>
+                      <TableCell>{d.last_http_status || 'â€”'}</TableCell>
                       <TableCell sx={{ fontSize: 11, maxWidth: 180 }}>
                         <Typography variant="caption" title={d.last_error}>
-                          {d.last_error?.substring(0, 50) || '—'}
+                          {d.last_error?.substring(0, 50) || 'â€”'}
                         </Typography>
                       </TableCell>
                       <TableCell sx={{ fontSize: 11, whiteSpace: 'nowrap' }}>{formatDate(d.updated_at)}</TableCell>
@@ -454,28 +736,37 @@ export default function Movements() {
         maxWidth="sm" fullWidth fullScreen={isMobile}>
         <DialogTitle>
           <Stack direction="row" alignItems="center" spacing={1}>
-            <BuildCircle color="warning" />
+            <BuildCircle color="warning" sx={{ fontSize: 20 }} />
             <span>Resolver manualmente</span>
           </Stack>
         </DialogTitle>
         <DialogContent dividers>
           {resolveDialog && (
             <Box>
-              <Box sx={{ mb: 2, p: 1.5, bgcolor: 'rgba(239,68,68,0.07)', borderRadius: 1, border: '1px solid rgba(239,68,68,0.2)' }}>
-                <Typography variant="caption" color="text.secondary" display="block">Movimiento</Typography>
-                <Typography variant="body2" fontWeight={600}>{resolveDialog.hg_id}</Typography>
+              <Box sx={{
+                mb: 2.5, p: 1.75,
+                bgcolor: 'rgba(239,68,68,0.06)',
+                borderRadius: 2,
+                border: '1px solid rgba(239,68,68,0.18)',
+              }}>
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  Movimiento a resolver
+                </Typography>
+                <Typography variant="body2" fontWeight={700} sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                  {resolveDialog.hg_id}
+                </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  Account ID recibido: {resolveDialog.account_id || '—'}
+                  Account ID recibido: {resolveDialog.account_id || 'â€”'}
                 </Typography>
                 {resolveDialog.unresolved_reason && (
-                  <Typography variant="caption" color="error" display="block" sx={{ mt: 0.5 }}>
+                  <Typography variant="caption" color="error" display="block" sx={{ mt: 0.75 }}>
                     {resolveDialog.unresolved_reason}
                   </Typography>
                 )}
               </Box>
               <Autocomplete
                 options={accounts}
-                getOptionLabel={a => `${a.name} — ${a.account_id} (${a.domain_name || 'sin dominio'})`}
+                getOptionLabel={a => `${a.name} â€” ${a.account_id} (${a.domain_name || 'sin dominio'})`}
                 value={selectedAccount}
                 onChange={(_, v) => setSelectedAccount(v)}
                 renderInput={params => (

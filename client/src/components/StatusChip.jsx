@@ -1,23 +1,23 @@
 import { Box } from '@mui/material';
 
 const cfg = {
-  success:           { label: 'Entregado',       bg: 'rgba(16,185,129,0.12)',  color: '#10b981' },
-  failed:            { label: 'Fallido',          bg: 'rgba(239,68,68,0.12)',   color: '#ef4444' },
-  pending:           { label: 'Pendiente',        bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b' },
-  processing:        { label: 'Procesando',       bg: 'rgba(59,130,246,0.12)',  color: '#3b82f6' },
-  done:              { label: 'Completado',       bg: 'rgba(16,185,129,0.12)',  color: '#10b981' },
-  Inbound:           { label: 'Entrada',          bg: 'rgba(16,185,129,0.12)',  color: '#10b981' },
-  Outbound:          { label: 'Salida',           bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b' },
-  active:            { label: 'Activo',           bg: 'rgba(16,185,129,0.12)',  color: '#10b981' },
-  inactive:          { label: 'Inactivo',         bg: 'rgba(100,116,139,0.12)', color: '#64748b' },
-  resolved:          { label: 'Resuelto',         bg: 'rgba(20,184,166,0.12)',  color: '#14b8a6' },
-  unresolved:        { label: 'No resuelto',      bg: 'rgba(239,68,68,0.12)',   color: '#ef4444' },
-  manually_resolved: { label: 'Resuelto manual',  bg: 'rgba(139,92,246,0.12)',  color: '#8b5cf6' },
-  dead:              { label: 'Dead Letter',       bg: 'rgba(30,41,59,0.15)',    color: '#475569'  },
+  success:           { label: 'Entregado',       bg: 'rgba(16,185,129,0.12)',  color: '#10b981', pulse: false },
+  failed:            { label: 'Fallido',          bg: 'rgba(239,68,68,0.12)',   color: '#ef4444', pulse: false },
+  pending:           { label: 'Pendiente',        bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b', pulse: true  },
+  processing:        { label: 'Procesando',       bg: 'rgba(59,130,246,0.12)',  color: '#3b82f6', pulse: true  },
+  done:              { label: 'Completado',       bg: 'rgba(16,185,129,0.12)',  color: '#10b981', pulse: false },
+  Inbound:           { label: 'Entrada',          bg: 'rgba(16,185,129,0.12)',  color: '#10b981', pulse: false },
+  Outbound:          { label: 'Salida',           bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b', pulse: false },
+  active:            { label: 'Activo',           bg: 'rgba(16,185,129,0.12)',  color: '#10b981', pulse: false },
+  inactive:          { label: 'Inactivo',         bg: 'rgba(100,116,139,0.12)', color: '#64748b', pulse: false },
+  resolved:          { label: 'Resuelto',         bg: 'rgba(20,184,166,0.12)',  color: '#14b8a6', pulse: false },
+  unresolved:        { label: 'No resuelto',      bg: 'rgba(239,68,68,0.12)',   color: '#ef4444', pulse: false },
+  manually_resolved: { label: 'Resuelto manual',  bg: 'rgba(139,92,246,0.12)',  color: '#8b5cf6', pulse: false },
+  dead:              { label: 'Dead Letter',       bg: 'rgba(30,41,59,0.25)',    color: '#475569', pulse: false },
 };
 
 export default function StatusChip({ status }) {
-  const c = cfg[status] || { label: status || '—', bg: 'rgba(100,116,139,0.12)', color: '#64748b' };
+  const c = cfg[status] || { label: status || '—', bg: 'rgba(100,116,139,0.12)', color: '#64748b', pulse: false };
   return (
     <Box
       component="span"
@@ -34,6 +34,7 @@ export default function StatusChip({ status }) {
         color: c.color,
         whiteSpace: 'nowrap',
         letterSpacing: '0.01em',
+        border: `1px solid ${c.color}22`,
       }}
     >
       <Box
@@ -44,6 +45,13 @@ export default function StatusChip({ status }) {
           borderRadius: '50%',
           bgcolor: 'currentColor',
           flexShrink: 0,
+          ...(c.pulse && {
+            animation: 'chipPulse 1.8s ease-in-out infinite',
+            '@keyframes chipPulse': {
+              '0%,100%': { opacity: 1, transform: 'scale(1)' },
+              '50%': { opacity: 0.35, transform: 'scale(0.7)' },
+            },
+          }),
         }}
       />
       {c.label}

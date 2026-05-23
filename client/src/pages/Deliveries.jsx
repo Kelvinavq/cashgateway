@@ -3,9 +3,8 @@ import {
   Box, Card, Typography, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, TablePagination, IconButton, Tooltip, FormControl, InputLabel,
   Select, MenuItem, Grid, Button, Skeleton, CardContent, useMediaQuery, useTheme,
-  Chip,
 } from '@mui/material';
-import { Refresh, RestoreFromTrash, CheckCircleOutline, CancelOutlined } from '@mui/icons-material';
+import { Refresh, RestoreFromTrash, CheckCircleOutlined, CancelOutlined, Send } from '@mui/icons-material';
 import api from '../lib/api';
 import StatusChip from '../components/StatusChip';
 import { useSocket } from '../hooks/useSocket';
@@ -73,8 +72,19 @@ export default function Deliveries() {
 
   return (
     <Box>
-      <Typography variant="h5" fontWeight={700} gutterBottom>Entregas</Typography>
+      {/* Page Header */}
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h5" fontWeight={700}>Entregas</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+          Estado de entregas de webhooks a dominios destino
+        </Typography>
+        <Box sx={{
+          height: '1px', mt: 1.5,
+          background: 'linear-gradient(90deg, rgba(99,102,241,0.55), rgba(139,92,246,0.25) 40%, transparent 75%)',
+        }} />
+      </Box>
 
+      {/* Filters */}
       <Card sx={{ mb: 2 }}>
         <CardContent sx={{ p: { xs: 1.5, sm: 2 }, '&:last-child': { pb: { xs: 1.5, sm: 2 } } }}>
           <Grid container spacing={1.5} alignItems="center">
@@ -96,11 +106,7 @@ export default function Deliveries() {
               </FormControl>
             </Grid>
             <Grid item xs="auto">
-              <Button
-                variant="outlined"
-                onClick={() => { setStatusFilter(''); setPage(0); }}
-                size="small"
-              >
+              <Button variant="outlined" onClick={() => { setStatusFilter(''); setPage(0); }} size="small">
                 Limpiar
               </Button>
             </Grid>
@@ -108,6 +114,7 @@ export default function Deliveries() {
         </CardContent>
       </Card>
 
+      {/* Table */}
       <Card>
         <TableContainer sx={{ overflowX: 'auto' }}>
           <Table size="small" sx={{ minWidth: 480 }}>
@@ -122,7 +129,7 @@ export default function Deliveries() {
                 <TableCell sx={hideMd}>ACK</TableCell>
                 <TableCell sx={hideMd}>Último Error</TableCell>
                 <TableCell sx={hideSm}>Actualizado</TableCell>
-                <TableCell align="right">Acc.</TableCell>
+                <TableCell align="right">Acciones</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -134,27 +141,40 @@ export default function Deliveries() {
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                    Sin entregas
+                  <TableCell colSpan={10}>
+                    <Box sx={{ py: 6, textAlign: 'center' }}>
+                      <Box sx={{
+                        width: 52, height: 52, borderRadius: '14px',
+                        background: 'linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.08))',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        mx: 'auto', mb: 2,
+                      }}>
+                        <Send sx={{ fontSize: 24, color: 'primary.light', opacity: 0.7 }} />
+                      </Box>
+                      <Typography variant="body2" fontWeight={600} color="text.secondary">Sin entregas</Typography>
+                      <Typography variant="caption" color="text.disabled">
+                        No hay entregas para el filtro seleccionado
+                      </Typography>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ) : rows.map(row => (
-                <TableRow key={row.id} hover sx={row.status === 'dead' ? { bgcolor: 'rgba(71,85,105,0.06)' } : {}}>
+                <TableRow key={row.id} hover sx={row.status === 'dead' ? { bgcolor: 'rgba(71,85,105,0.05)' } : {}}>
                   <TableCell><StatusChip status={row.status} /></TableCell>
                   <TableCell sx={{ fontSize: 12, ...hideSm }}>{row.domain_name || '—'}</TableCell>
                   <TableCell sx={{ fontSize: 11, fontFamily: 'monospace', ...hideMd }}>
                     {row.hg_id?.substring(0, 12) || '—'}…
                   </TableCell>
-                  <TableCell sx={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', ...hideSm }}>
+                  <TableCell sx={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', ...hideSm }}>
                     {formatAmount(row.amount)}
                   </TableCell>
-                  <TableCell>{row.attempts}</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}>{row.attempts}</TableCell>
                   <TableCell sx={hideSm}>{row.last_http_status || '—'}</TableCell>
                   <TableCell sx={hideMd}>
                     {row.ack_received ? (
                       row.ack_valid ? (
                         <Tooltip title="ACK válido">
-                          <CheckCircleOutline sx={{ fontSize: 16, color: '#10b981' }} />
+                          <CheckCircleOutlined sx={{ fontSize: 16, color: '#10b981' }} />
                         </Tooltip>
                       ) : (
                         <Tooltip title="ACK inválido">
@@ -170,7 +190,7 @@ export default function Deliveries() {
                       {row.last_error?.substring(0, 60) || '—'}
                     </Typography>
                   </TableCell>
-                  <TableCell sx={{ fontSize: 11, whiteSpace: 'nowrap', ...hideSm }}>
+                  <TableCell sx={{ fontSize: 11, whiteSpace: 'nowrap', color: 'text.secondary', ...hideSm }}>
                     {formatDate(row.updated_at)}
                   </TableCell>
                   <TableCell align="right">

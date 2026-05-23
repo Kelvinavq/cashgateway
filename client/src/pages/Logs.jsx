@@ -4,14 +4,15 @@ import {
   TableRow, TablePagination, FormControl, InputLabel, Select, MenuItem, Grid,
   TextField, Button, Skeleton, Chip, Stack, CardContent, useMediaQuery, useTheme,
 } from '@mui/material';
+import { Article } from '@mui/icons-material';
 import api from '../lib/api';
 import toast from 'react-hot-toast';
 
 const LEVEL_COLORS = {
-  info:  { bg: 'rgba(59,130,246,0.12)',  color: '#3b82f6' },
-  warn:  { bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b' },
-  error: { bg: 'rgba(239,68,68,0.12)',   color: '#ef4444' },
-  debug: { bg: 'rgba(100,116,139,0.12)', color: '#64748b' },
+  info:  { bg: 'rgba(59,130,246,0.12)',  color: '#3b82f6',  border: 'rgba(59,130,246,0.2)'  },
+  warn:  { bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b',  border: 'rgba(245,158,11,0.2)'  },
+  error: { bg: 'rgba(239,68,68,0.12)',   color: '#ef4444',  border: 'rgba(239,68,68,0.2)'   },
+  debug: { bg: 'rgba(100,116,139,0.1)',  color: '#64748b',  border: 'rgba(100,116,139,0.15)' },
 };
 
 function LevelChip({ level }) {
@@ -21,9 +22,12 @@ function LevelChip({ level }) {
       component="span"
       sx={{
         display: 'inline-flex', alignItems: 'center', gap: '4px',
-        px: '7px', py: '2px', borderRadius: '5px',
-        fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase',
-        bgcolor: c.bg, color: c.color, whiteSpace: 'nowrap',
+        px: '8px', py: '2px', borderRadius: '5px',
+        fontSize: '0.63rem', fontWeight: 700, textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        bgcolor: c.bg, color: c.color,
+        border: `1px solid ${c.border}`,
+        whiteSpace: 'nowrap',
       }}
     >
       {level}
@@ -73,7 +77,6 @@ export default function Logs() {
 
   const applyFilters = () => { setApplied(filters); setPage(0); };
   const clearFilters = () => { setFilters(EMPTY_FILTERS); setApplied(EMPTY_FILTERS); setPage(0); };
-
   const setF = (k) => (e) => setFilters(p => ({ ...p, [k]: e.target.value }));
 
   const hideSm = { display: { xs: 'none', sm: 'table-cell' } };
@@ -81,8 +84,19 @@ export default function Logs() {
 
   return (
     <Box>
-      <Typography variant="h5" fontWeight={700} gutterBottom>Logs del Sistema</Typography>
+      {/* Page Header */}
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h5" fontWeight={700}>Logs del Sistema</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+          Registro de actividad y eventos del gateway
+        </Typography>
+        <Box sx={{
+          height: '1px', mt: 1.5,
+          background: 'linear-gradient(90deg, rgba(99,102,241,0.55), rgba(139,92,246,0.25) 40%, transparent 75%)',
+        }} />
+      </Box>
 
+      {/* Filters */}
       <Card sx={{ mb: 2 }}>
         <CardContent sx={{ p: { xs: 1.5, sm: 2 }, '&:last-child': { pb: { xs: 1.5, sm: 2 } } }}>
           <Grid container spacing={1.5} alignItems="center">
@@ -136,6 +150,7 @@ export default function Logs() {
         </CardContent>
       </Card>
 
+      {/* Table */}
       <Card>
         <TableContainer sx={{ overflowX: 'auto' }}>
           <Table size="small" sx={{ minWidth: 500 }}>
@@ -159,8 +174,23 @@ export default function Logs() {
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                    Sin logs registrados
+                  <TableCell colSpan={7}>
+                    <Box sx={{ py: 6, textAlign: 'center' }}>
+                      <Box sx={{
+                        width: 52, height: 52, borderRadius: '14px',
+                        background: 'linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.08))',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        mx: 'auto', mb: 2,
+                      }}>
+                        <Article sx={{ fontSize: 26, color: 'primary.light', opacity: 0.7 }} />
+                      </Box>
+                      <Typography variant="body2" fontWeight={600} color="text.secondary">
+                        Sin logs registrados
+                      </Typography>
+                      <Typography variant="caption" color="text.disabled">
+                        No hay eventos para los filtros seleccionados
+                      </Typography>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ) : rows.map(row => (
@@ -176,7 +206,9 @@ export default function Logs() {
                   </TableCell>
                   <TableCell sx={{ fontSize: 11, ...hideMd }}>
                     {row.event_type ? (
-                      <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{row.event_type}</Typography>
+                      <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'primary.light' }}>
+                        {row.event_type}
+                      </Typography>
                     ) : '—'}
                   </TableCell>
                   <TableCell sx={{ maxWidth: 320 }}>

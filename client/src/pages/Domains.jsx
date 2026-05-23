@@ -6,7 +6,7 @@ import {
   Alert, Divider,
   useMediaQuery, useTheme,
 } from '@mui/material';
-import { Add, Edit, Delete, ContentCopy, Refresh, Lock, LockOpen } from '@mui/icons-material';
+import { Add, Edit, Delete, ContentCopy, Refresh, Lock, LockOpen, Language } from '@mui/icons-material';
 import api from '../lib/api';
 import StatusChip from '../components/StatusChip';
 import toast from 'react-hot-toast';
@@ -26,7 +26,7 @@ export default function Domains() {
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
-  const [secretAlert, setSecretAlert] = useState(null); // { domainName, secret }
+  const [secretAlert, setSecretAlert] = useState(null);
 
   const fetch = useCallback(async () => {
     setLoading(true);
@@ -112,11 +112,23 @@ export default function Domains() {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, gap: 1 }}>
-        <Typography variant="h5" fontWeight={700}>Dominios</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={openCreate} size={isMobile ? 'small' : 'medium'}>
-          {isMobile ? 'Nuevo' : 'Nuevo Dominio'}
-        </Button>
+      {/* Page Header */}
+      <Box sx={{ mb: 3 }}>
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+          <Box>
+            <Typography variant="h5" fontWeight={700}>Dominios</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+              Configuración de dominios destino para entregas
+            </Typography>
+          </Box>
+          <Button variant="contained" startIcon={<Add />} onClick={openCreate} size={isMobile ? 'small' : 'medium'}>
+            {isMobile ? 'Nuevo' : 'Nuevo Dominio'}
+          </Button>
+        </Box>
+        <Box sx={{
+          height: '1px', mt: 1.5,
+          background: 'linear-gradient(90deg, rgba(99,102,241,0.55), rgba(139,92,246,0.25) 40%, transparent 75%)',
+        }} />
       </Box>
 
       {secretAlert && (
@@ -143,7 +155,7 @@ export default function Domains() {
                 <TableCell sx={hideMd}>Firma</TableCell>
                 <TableCell sx={hideMd}>ACK</TableCell>
                 <TableCell>Estado</TableCell>
-                <TableCell align="right">Acc.</TableCell>
+                <TableCell align="right">Acciones</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -155,29 +167,51 @@ export default function Domains() {
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                    No hay dominios. Crea el primero.
+                  <TableCell colSpan={8}>
+                    <Box sx={{ py: 6, textAlign: 'center' }}>
+                      <Box sx={{
+                        width: 52, height: 52, borderRadius: '14px',
+                        background: 'linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.08))',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        mx: 'auto', mb: 2,
+                      }}>
+                        <Language sx={{ fontSize: 26, color: 'primary.light', opacity: 0.7 }} />
+                      </Box>
+                      <Typography variant="body2" fontWeight={600} color="text.secondary">
+                        No hay dominios
+                      </Typography>
+                      <Typography variant="caption" color="text.disabled">
+                        Creá el primer dominio para empezar
+                      </Typography>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ) : rows.map(row => (
                 <TableRow key={row.id} hover>
                   <TableCell>
                     <Typography variant="body2" fontWeight={600}>{row.name}</Typography>
-                    <Typography
-                      variant="caption"
-                      sx={{ fontFamily: 'monospace', bgcolor: 'action.hover', px: 0.5, borderRadius: 0.5, display: { sm: 'none' } }}
-                    >
+                    <Typography variant="caption" sx={{
+                      fontFamily: 'monospace', bgcolor: 'action.hover',
+                      px: 0.5, borderRadius: 0.5, display: { sm: 'none' },
+                    }}>
                       {row.slug}
                     </Typography>
                   </TableCell>
                   <TableCell sx={hideSm}>
-                    <Typography variant="caption" sx={{ fontFamily: 'monospace', bgcolor: 'action.hover', px: 1, py: 0.5, borderRadius: 1 }}>
+                    <Typography variant="caption" sx={{
+                      fontFamily: 'monospace',
+                      bgcolor: 'rgba(99,102,241,0.08)',
+                      color: 'primary.light',
+                      px: 1, py: 0.5, borderRadius: 1,
+                      border: '1px solid rgba(99,102,241,0.15)',
+                    }}>
                       {row.slug}
                     </Typography>
                   </TableCell>
                   <TableCell sx={{ fontSize: 12, ...hideMd }}>{row.base_url}</TableCell>
                   <TableCell sx={{ fontSize: 12, maxWidth: 200, ...hideSm }}>
-                    <Typography variant="caption" noWrap title={row.destination_webhook_url} display="block">
+                    <Typography variant="caption" noWrap title={row.destination_webhook_url} display="block"
+                      color="text.secondary">
                       {row.destination_webhook_url || '—'}
                     </Typography>
                   </TableCell>
@@ -204,10 +238,14 @@ export default function Domains() {
                   <TableCell align="right">
                     <Stack direction="row" spacing={0} justifyContent="flex-end">
                       <Tooltip title="Editar">
-                        <IconButton size="small" onClick={() => openEdit(row)}><Edit sx={{ fontSize: 16 }} /></IconButton>
+                        <IconButton size="small" onClick={() => openEdit(row)}>
+                          <Edit sx={{ fontSize: 16 }} />
+                        </IconButton>
                       </Tooltip>
                       <Tooltip title="Eliminar">
-                        <IconButton size="small" color="error" onClick={() => setDeleteConfirm(row)}><Delete sx={{ fontSize: 16 }} /></IconButton>
+                        <IconButton size="small" color="error" onClick={() => setDeleteConfirm(row)}>
+                          <Delete sx={{ fontSize: 16 }} />
+                        </IconButton>
                       </Tooltip>
                     </Stack>
                   </TableCell>
@@ -228,32 +266,25 @@ export default function Domains() {
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField
-                label="Slug"
-                fullWidth
-                size="small"
-                required
+                label="Slug" fullWidth size="small" required
                 {...field('slug')}
                 helperText="Solo minúsculas, números y guiones"
               />
             </Grid>
             <Grid item xs={12}>
-              <TextField label="Base URL" fullWidth size="small" required {...field('base_url')} placeholder="https://miapp.com" />
+              <TextField label="Base URL" fullWidth size="small" required {...field('base_url')}
+                placeholder="https://miapp.com" />
             </Grid>
             <Grid item xs={12}>
               <TextField
-                label="Destination Webhook URL"
-                fullWidth
-                size="small"
-                required
+                label="Destination Webhook URL" fullWidth size="small" required
                 {...field('destination_webhook_url')}
                 placeholder="https://miapp.com/webhooks/hgcash"
               />
             </Grid>
             <Grid item xs={12}>
               <TextField
-                label="Destination Token"
-                fullWidth
-                size="small"
+                label="Destination Token" fullWidth size="small"
                 {...field('destination_token')}
                 helperText="Se envía en el header x-gateway-token al destino"
               />
@@ -268,13 +299,12 @@ export default function Domains() {
                   <Stack direction="row" alignItems="center" spacing={1}>
                     <TextField
                       label="Firma HMAC (secreto)"
-                      fullWidth
-                      size="small"
+                      fullWidth size="small"
                       value={form._signing_secret_masked}
                       InputProps={{ readOnly: true, sx: { fontFamily: 'monospace', fontSize: 12 } }}
                       helperText="Cabecera x-gateway-signature en cada entrega"
                     />
-                    <Tooltip title="Copiar (enmascarado)">
+                    <Tooltip title="Copiar">
                       <IconButton size="small" onClick={() => copy(form._signing_secret_masked)}>
                         <ContentCopy sx={{ fontSize: 16 }} />
                       </IconButton>

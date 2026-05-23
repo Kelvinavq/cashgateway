@@ -5,7 +5,7 @@ import {
   DialogActions, TextField, Switch, FormControlLabel, Grid, Skeleton, Stack,
   Chip, Alert, useMediaQuery, useTheme,
 } from '@mui/material';
-import { Add, Edit, Delete, Refresh, ContentCopy, Visibility, VisibilityOff } from '@mui/icons-material';
+import { Add, Edit, Delete, Refresh, ContentCopy, Visibility, VisibilityOff, Dns } from '@mui/icons-material';
 import api from '../lib/api';
 import StatusChip from '../components/StatusChip';
 import toast from 'react-hot-toast';
@@ -22,7 +22,7 @@ export default function Providers() {
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
-  const [newTokenAlert, setNewTokenAlert] = useState(null); // { id, token }
+  const [newTokenAlert, setNewTokenAlert] = useState(null);
   const [showTokenId, setShowTokenId] = useState(null);
 
   const fetch = useCallback(async () => {
@@ -99,21 +99,29 @@ export default function Providers() {
     }
   };
 
-  const copy = (text) => {
-    navigator.clipboard.writeText(text);
-    toast.success('Copiado');
-  };
-
+  const copy = (text) => { navigator.clipboard.writeText(text); toast.success('Copiado'); };
   const field = (k) => ({ value: form[k], onChange: e => setForm(p => ({ ...p, [k]: e.target.value })) });
   const hideSm = { display: { xs: 'none', sm: 'table-cell' } };
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, gap: 1 }}>
-        <Typography variant="h5" fontWeight={700}>Proveedores</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={openCreate} size={isMobile ? 'small' : 'medium'}>
-          {isMobile ? 'Nuevo' : 'Nuevo Proveedor'}
-        </Button>
+      {/* Page Header */}
+      <Box sx={{ mb: 3 }}>
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+          <Box>
+            <Typography variant="h5" fontWeight={700}>Proveedores</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+              Fuentes de webhooks autorizadas al gateway
+            </Typography>
+          </Box>
+          <Button variant="contained" startIcon={<Add />} onClick={openCreate} size={isMobile ? 'small' : 'medium'}>
+            {isMobile ? 'Nuevo' : 'Nuevo Proveedor'}
+          </Button>
+        </Box>
+        <Box sx={{
+          height: '1px', mt: 1.5,
+          background: 'linear-gradient(90deg, rgba(99,102,241,0.55), rgba(139,92,246,0.25) 40%, transparent 75%)',
+        }} />
       </Box>
 
       {newTokenAlert && (
@@ -121,9 +129,7 @@ export default function Providers() {
           severity="success"
           sx={{ mb: 2 }}
           onClose={() => setNewTokenAlert(null)}
-          action={
-            <Button size="small" onClick={() => copy(newTokenAlert.token)}>Copiar</Button>
-          }
+          action={<Button size="small" onClick={() => copy(newTokenAlert.token)}>Copiar</Button>}
         >
           <strong>Token generado (solo se muestra una vez):</strong>{' '}
           <code style={{ wordBreak: 'break-all' }}>{newTokenAlert.token}</code>
@@ -139,7 +145,7 @@ export default function Providers() {
                 <TableCell sx={hideSm}>Token</TableCell>
                 <TableCell sx={hideSm}>IP Whitelist</TableCell>
                 <TableCell>Estado</TableCell>
-                <TableCell align="right">Acc.</TableCell>
+                <TableCell align="right">Acciones</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -151,8 +157,23 @@ export default function Providers() {
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                    No hay proveedores. Crea el primero.
+                  <TableCell colSpan={5}>
+                    <Box sx={{ py: 6, textAlign: 'center' }}>
+                      <Box sx={{
+                        width: 52, height: 52, borderRadius: '14px',
+                        background: 'linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.08))',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        mx: 'auto', mb: 2,
+                      }}>
+                        <Dns sx={{ fontSize: 26, color: 'primary.light', opacity: 0.7 }} />
+                      </Box>
+                      <Typography variant="body2" fontWeight={600} color="text.secondary">
+                        No hay proveedores
+                      </Typography>
+                      <Typography variant="caption" color="text.disabled">
+                        Creá el primer proveedor para empezar
+                      </Typography>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ) : rows.map(row => (
@@ -162,16 +183,26 @@ export default function Providers() {
                   </TableCell>
                   <TableCell sx={hideSm}>
                     <Stack direction="row" alignItems="center" spacing={0.5}>
-                      <Typography variant="caption" sx={{ fontFamily: 'monospace', bgcolor: 'action.hover', px: 1, py: 0.5, borderRadius: 1 }}>
+                      <Typography variant="caption" sx={{
+                        fontFamily: 'monospace',
+                        bgcolor: 'rgba(99,102,241,0.08)',
+                        color: 'primary.light',
+                        px: 1, py: 0.5, borderRadius: 1,
+                        border: '1px solid rgba(99,102,241,0.15)',
+                      }}>
                         {showTokenId === row.id ? row.token : row.token_masked}
                       </Typography>
                       <Tooltip title={showTokenId === row.id ? 'Ocultar' : 'Ver'}>
                         <IconButton size="small" onClick={() => setShowTokenId(showTokenId === row.id ? null : row.id)}>
-                          {showTokenId === row.id ? <VisibilityOff sx={{ fontSize: 14 }} /> : <Visibility sx={{ fontSize: 14 }} />}
+                          {showTokenId === row.id
+                            ? <VisibilityOff sx={{ fontSize: 14 }} />
+                            : <Visibility sx={{ fontSize: 14 }} />}
                         </IconButton>
                       </Tooltip>
                       <Tooltip title="Copiar token">
-                        <IconButton size="small" onClick={() => copy(row.token)}><ContentCopy sx={{ fontSize: 14 }} /></IconButton>
+                        <IconButton size="small" onClick={() => copy(row.token)}>
+                          <ContentCopy sx={{ fontSize: 14 }} />
+                        </IconButton>
                       </Tooltip>
                     </Stack>
                   </TableCell>
@@ -198,10 +229,14 @@ export default function Providers() {
                         </IconButton>
                       </Tooltip>
                       <Tooltip title="Editar">
-                        <IconButton size="small" onClick={() => openEdit(row)}><Edit sx={{ fontSize: 16 }} /></IconButton>
+                        <IconButton size="small" onClick={() => openEdit(row)}>
+                          <Edit sx={{ fontSize: 16 }} />
+                        </IconButton>
                       </Tooltip>
                       <Tooltip title="Eliminar">
-                        <IconButton size="small" color="error" onClick={() => setDeleteConfirm(row)}><Delete sx={{ fontSize: 16 }} /></IconButton>
+                        <IconButton size="small" color="error" onClick={() => setDeleteConfirm(row)}>
+                          <Delete sx={{ fontSize: 16 }} />
+                        </IconButton>
                       </Tooltip>
                     </Stack>
                   </TableCell>
@@ -223,12 +258,9 @@ export default function Providers() {
             <Grid item xs={12}>
               <TextField
                 label="IP Whitelist"
-                fullWidth
-                size="small"
-                multiline
-                rows={3}
+                fullWidth size="small" multiline rows={3}
                 {...field('ip_whitelist')}
-                placeholder="192.168.1.0/24&#10;10.0.0.1&#10;(una por línea; vacío = cualquier IP)"
+                placeholder={'192.168.1.0/24\n10.0.0.1\n(una por línea; vacío = cualquier IP)'}
                 helperText="IPs o rangos CIDR separados por línea. Vacío = permite cualquier IP."
               />
             </Grid>

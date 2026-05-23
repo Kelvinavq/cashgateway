@@ -5,7 +5,7 @@ import {
   DialogActions, TextField, Select, MenuItem, FormControl, InputLabel, Switch,
   FormControlLabel, Grid, Skeleton, Stack, useMediaQuery, useTheme,
 } from '@mui/material';
-import { Add, Edit, Delete, ContentCopy, Check } from '@mui/icons-material';
+import { Add, Edit, Delete, ContentCopy, Check, AccountBalance } from '@mui/icons-material';
 import api from '../lib/api';
 import StatusChip from '../components/StatusChip';
 import toast from 'react-hot-toast';
@@ -102,11 +102,23 @@ export default function Accounts() {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, gap: 1 }}>
-        <Typography variant="h5" fontWeight={700}>Cuentas HG.Cash</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={openCreate} size={isMobile ? 'small' : 'medium'}>
-          {isMobile ? 'Nueva' : 'Nueva Cuenta'}
-        </Button>
+      {/* Page Header */}
+      <Box sx={{ mb: 3 }}>
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+          <Box>
+            <Typography variant="h5" fontWeight={700}>Cuentas HG.Cash</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+              Gestión de cuentas vinculadas al gateway
+            </Typography>
+          </Box>
+          <Button variant="contained" startIcon={<Add />} onClick={openCreate} size={isMobile ? 'small' : 'medium'}>
+            {isMobile ? 'Nueva' : 'Nueva Cuenta'}
+          </Button>
+        </Box>
+        <Box sx={{
+          height: '1px', mt: 1.5,
+          background: 'linear-gradient(90deg, rgba(99,102,241,0.55), rgba(139,92,246,0.25) 40%, transparent 75%)',
+        }} />
       </Box>
 
       <Card>
@@ -120,7 +132,7 @@ export default function Accounts() {
                 <TableCell sx={hideSm}>Dominio</TableCell>
                 <TableCell>Estado</TableCell>
                 <TableCell sx={hideMd}>URL Webhook</TableCell>
-                <TableCell align="right">Acc.</TableCell>
+                <TableCell align="right">Acciones</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -132,15 +144,31 @@ export default function Accounts() {
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                    No hay cuentas. Crea la primera.
+                  <TableCell colSpan={7}>
+                    <Box sx={{ py: 6, textAlign: 'center' }}>
+                      <Box sx={{
+                        width: 52, height: 52, borderRadius: '14px',
+                        background: 'linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.08))',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        mx: 'auto', mb: 2,
+                      }}>
+                        <AccountBalance sx={{ fontSize: 26, color: 'primary.light', opacity: 0.7 }} />
+                      </Box>
+                      <Typography variant="body2" fontWeight={600} color="text.secondary">
+                        No hay cuentas
+                      </Typography>
+                      <Typography variant="caption" color="text.disabled">
+                        Creá la primera cuenta para empezar
+                      </Typography>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ) : rows.map(row => (
                 <TableRow key={row.id} hover>
                   <TableCell>
                     <Typography variant="body2" fontWeight={600}>{row.name}</Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', display: { sm: 'none' } }}>
+                    <Typography variant="caption" color="text.secondary"
+                      sx={{ fontFamily: 'monospace', display: { sm: 'none' } }}>
                       {row.cuit}
                     </Typography>
                   </TableCell>
@@ -153,11 +181,11 @@ export default function Accounts() {
                   <TableCell sx={hideMd}>
                     {row.webhook_url && (
                       <Stack direction="row" alignItems="center" spacing={0.5}>
-                        <Typography
-                          variant="caption"
-                          sx={{ fontFamily: 'monospace', fontSize: 10, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                          title={row.webhook_url}
-                        >
+                        <Typography variant="caption" sx={{
+                          fontFamily: 'monospace', fontSize: 10,
+                          maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          color: 'text.secondary',
+                        }} title={row.webhook_url}>
                           {row.webhook_url}
                         </Typography>
                         <Tooltip title={copied === row.id ? 'Copiado!' : 'Copiar URL'}>
@@ -182,10 +210,14 @@ export default function Accounts() {
                         </Tooltip>
                       )}
                       <Tooltip title="Editar">
-                        <IconButton size="small" onClick={() => openEdit(row)}><Edit sx={{ fontSize: 16 }} /></IconButton>
+                        <IconButton size="small" onClick={() => openEdit(row)}>
+                          <Edit sx={{ fontSize: 16 }} />
+                        </IconButton>
                       </Tooltip>
                       <Tooltip title="Eliminar">
-                        <IconButton size="small" color="error" onClick={() => setDeleteConfirm(row)}><Delete sx={{ fontSize: 16 }} /></IconButton>
+                        <IconButton size="small" color="error" onClick={() => setDeleteConfirm(row)}>
+                          <Delete sx={{ fontSize: 16 }} />
+                        </IconButton>
                       </Tooltip>
                     </Stack>
                   </TableCell>
@@ -207,9 +239,7 @@ export default function Accounts() {
             <Grid item xs={12} sm={6}>
               <TextField
                 label="Account ID (HG)"
-                fullWidth
-                size="small"
-                required
+                fullWidth size="small" required
                 {...field('account_id')}
                 disabled={dialog !== 'create'}
                 helperText={dialog !== 'create' ? 'No editable' : ''}
@@ -227,11 +257,8 @@ export default function Accounts() {
             <Grid item xs={12} sm={6}>
               <FormControl fullWidth size="small" required>
                 <InputLabel>Dominio</InputLabel>
-                <Select
-                  value={form.domain_id}
-                  label="Dominio"
-                  onChange={e => setForm(p => ({ ...p, domain_id: e.target.value }))}
-                >
+                <Select value={form.domain_id} label="Dominio"
+                  onChange={e => setForm(p => ({ ...p, domain_id: e.target.value }))}>
                   {domains.map(d => <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>)}
                 </Select>
               </FormControl>
@@ -242,8 +269,7 @@ export default function Accounts() {
             <Grid item xs={12}>
               <TextField
                 label="Provider Token (opcional)"
-                fullWidth
-                size="small"
+                fullWidth size="small"
                 {...field('provider_token')}
                 helperText="Token que el proveedor envía en x-provider-token"
               />
@@ -268,7 +294,9 @@ export default function Accounts() {
       <Dialog open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Confirmar eliminación</DialogTitle>
         <DialogContent>
-          <Typography>¿Eliminar la cuenta <strong>{deleteConfirm?.name}</strong>? Esta acción no se puede deshacer.</Typography>
+          <Typography>
+            ¿Eliminar la cuenta <strong>{deleteConfirm?.name}</strong>? Esta acción no se puede deshacer.
+          </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteConfirm(null)}>Cancelar</Button>
