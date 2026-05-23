@@ -13,6 +13,7 @@ const cfg = {
   resolved:          { label: 'Resuelto',         bg: 'rgba(20,184,166,0.12)',  color: '#14b8a6' },
   unresolved:        { label: 'No resuelto',      bg: 'rgba(239,68,68,0.12)',   color: '#ef4444' },
   manually_resolved: { label: 'Resuelto manual',  bg: 'rgba(139,92,246,0.12)',  color: '#8b5cf6' },
+  dead:              { label: 'Dead Letter',       bg: 'rgba(30,41,59,0.15)',    color: '#475569'  },
 };
 
 export default function StatusChip({ status }) {

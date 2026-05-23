@@ -7,6 +7,7 @@ import {
 import {
   Dashboard, SwapHoriz, Webhook, AccountBalance, Language,
   Send, LightMode, DarkMode, Logout, Menu as MenuIcon,
+  Dns, Article,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme as useAppTheme } from '../contexts/ThemeContext';
@@ -20,6 +21,8 @@ const navItems = [
   { path: '/deliveries',label: 'Entregas',    icon: Send },
   { path: '/accounts',  label: 'Cuentas HG', icon: AccountBalance },
   { path: '/domains',   label: 'Dominios',   icon: Language },
+  { path: '/providers', label: 'Proveedores', icon: Dns },
+  { path: '/logs',      label: 'Logs',        icon: Article },
 ];
 
 function NavItem({ path, label, Icon, active, onClick }) {

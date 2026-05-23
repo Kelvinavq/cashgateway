@@ -6,21 +6,20 @@ const { connectRedis } = require('../config/redis');
 const { forwardWebhook } = require('../services/webhookForwardService');
 const { invalidateStatsCache } = require('../services/statsService');
 const socketService = require('../services/socketService');
+const logService = require('../services/logService');
 const logger = require('../utils/logger');
 const env = require('../config/env');
 
-const connection = {
-  host: env.redis.host,
-  port: env.redis.port,
-};
+const connection = { host: env.redis.host, port: env.redis.port };
+const MAX_ATTEMPTS = 5;
 
 const worker = new Worker(
   'webhook-forward',
   async (job) => {
     const { deliveryId, movementId } = job.data;
-    logger.info(`Processing delivery id=${deliveryId}, attempt=${job.attemptsMade + 1}`);
+    const attemptNumber = job.attemptsMade + 1;
+    logger.info(`Processing delivery id=${deliveryId}, attempt=${attemptNumber}`);
 
-    // Mark as processing
     await pool.query(
       "UPDATE webhook_deliveries SET status='processing', attempts=attempts+1, updated_at=NOW() WHERE id=?",
       [deliveryId]
@@ -40,52 +39,101 @@ const worker = new Worker(
 
     let httpStatus = null;
     let responseBody = null;
+    let ackReceived = 0;
+    let ackValid = 0;
+    let ackPayload = null;
     let error = null;
 
     try {
-      const response = await forwardWebhook(delivery, movement, domain);
-      httpStatus = response.status;
-      responseBody = typeof response.data === 'string' ? response.data.substring(0, 1000) : JSON.stringify(response.data).substring(0, 1000);
+      const result = await forwardWebhook(delivery, movement, domain);
+      httpStatus = result.response.status;
+      ackReceived = result.ackReceived;
+      ackValid = result.ackValid;
+      ackPayload = result.ackPayload;
+      responseBody = typeof result.response.data === 'string'
+        ? result.response.data.substring(0, 1000)
+        : JSON.stringify(result.response.data).substring(0, 1000);
 
-      if (response.status >= 200 && response.status < 300) {
+      if (result.response.status >= 200 && result.response.status < 300) {
         await pool.query(
-          "UPDATE webhook_deliveries SET status='success', last_http_status=?, last_response_body=?, delivered_at=NOW(), updated_at=NOW() WHERE id=?",
-          [httpStatus, responseBody, deliveryId]
+          `UPDATE webhook_deliveries
+           SET status='success', last_http_status=?, last_response_body=?,
+               ack_received=?, ack_valid=?, ack_payload=?,
+               delivered_at=NOW(), updated_at=NOW()
+           WHERE id=?`,
+          [httpStatus, responseBody, ackReceived, ackValid, ackPayload ? JSON.stringify(ackPayload) : null, deliveryId]
         );
-        await pool.query("UPDATE movements SET forwarded_to_domain_at=NOW(), updated_at=NOW() WHERE id=?", [movementId]);
+        await pool.query(
+          'UPDATE movements SET forwarded_to_domain_at=NOW(), updated_at=NOW() WHERE id=?',
+          [movementId]
+        );
         logger.info(`Delivery ${deliveryId} succeeded with HTTP ${httpStatus}`);
+        logService.info({
+          source: 'webhookWorker',
+          event_type: 'delivery_success',
+          gateway_event_id: movement.gateway_event_id,
+          movement_id: movementId,
+          delivery_id: deliveryId,
+          message: `Delivery succeeded HTTP ${httpStatus}`,
+          metadata: { httpStatus, ackValid },
+        });
       } else {
-        error = `HTTP ${response.status}: ${responseBody}`;
+        error = `HTTP ${result.response.status}: ${responseBody}`;
         throw new Error(error);
       }
     } catch (err) {
+      // Handle ACK errors specially (ackReceived may already be 1)
+      if (err.isAckError) {
+        ackReceived = err.ackReceived || 0;
+        ackPayload = err.ackPayload;
+        ackValid = 0;
+      }
+
       error = err.message;
-      const maxAttempts = 5;
-      const isFinal = (job.attemptsMade + 1) >= maxAttempts;
+      const isFinal = attemptNumber >= MAX_ATTEMPTS;
       const nextRetry = isFinal ? null : new Date(Date.now() + Math.pow(2, job.attemptsMade) * 5000);
+      const newStatus = isFinal ? 'dead' : 'pending';
 
       await pool.query(
-        "UPDATE webhook_deliveries SET status=?, last_http_status=?, last_response_body=?, last_error=?, next_retry_at=?, updated_at=NOW() WHERE id=?",
-        [isFinal ? 'failed' : 'pending', httpStatus, responseBody, error, nextRetry, deliveryId]
+        `UPDATE webhook_deliveries
+         SET status=?, last_http_status=?, last_response_body=?, last_error=?,
+             ack_received=?, ack_valid=?, ack_payload=?,
+             next_retry_at=?,
+             ${isFinal ? 'dead_at=NOW(),' : ''}
+             updated_at=NOW()
+         WHERE id=?`,
+        [
+          newStatus, httpStatus, responseBody, error,
+          ackReceived, ackValid, ackPayload ? JSON.stringify(ackPayload) : null,
+          nextRetry,
+          deliveryId,
+        ]
       );
 
-      socketService.emit('delivery:updated', { deliveryId, status: isFinal ? 'failed' : 'pending', error });
+      socketService.emit('delivery:updated', { deliveryId, status: newStatus, error });
       await invalidateStatsCache();
 
-      if (!isFinal) {
-        throw err; // BullMQ will retry
-      }
-      return; // Final failure — don't rethrow
+      const logEntry = {
+        source: 'webhookWorker',
+        event_type: isFinal ? 'delivery_dead' : 'delivery_retry',
+        gateway_event_id: movement.gateway_event_id,
+        movement_id: movementId,
+        delivery_id: deliveryId,
+        message: isFinal
+          ? `Delivery moved to DLQ after ${MAX_ATTEMPTS} attempts: ${error}`
+          : `Delivery attempt ${attemptNumber} failed: ${error}`,
+        metadata: { httpStatus, attempts: attemptNumber, isFinal, isAckError: err.isAckError || false },
+      };
+      isFinal ? logService.error(logEntry) : logService.warn(logEntry);
+
+      if (!isFinal) throw err; // BullMQ will retry
+      return; // DLQ — don't rethrow, job is considered "complete" (dead)
     }
 
-    socketService.emit('delivery:updated', { deliveryId, status: 'success', httpStatus });
+    socketService.emit('delivery:updated', { deliveryId, status: 'success', httpStatus, ackValid });
     await invalidateStatsCache();
   },
-  {
-    connection,
-    attempts: 5,
-    backoff: { type: 'exponential', delay: 5000 },
-  }
+  { connection, attempts: MAX_ATTEMPTS, backoff: { type: 'exponential', delay: 5000 } }
 );
 
 worker.on('completed', (job) => logger.info(`Job ${job.id} completed`));

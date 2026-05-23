@@ -5,33 +5,47 @@ const { saveMovement, updateMovement, createDelivery } = require('../services/mo
 const { webhookQueue } = require('../queues/webhookQueue');
 const socketService = require('../services/socketService');
 const { invalidateStatsCache } = require('../services/statsService');
+const logService = require('../services/logService');
+const { extractIp, isIpAllowed } = require('../utils/ipValidator');
 const logger = require('../utils/logger');
 
-async function validateProviderToken(token, providerToken) {
+/**
+ * Resolve auth from provider_sources (new) with fallback to hgcash_accounts.gateway_token (legacy).
+ * Returns { providerSource, gatewayAccount, error }
+ */
+async function resolveAuth(token, providerTokenHeader, ip) {
+  // 1. Try provider_sources (new system)
+  const [providers] = await pool.query(
+    'SELECT * FROM provider_sources WHERE token = ? AND is_active = 1 LIMIT 1',
+    [token]
+  );
+  if (providers[0]) {
+    const src = providers[0];
+    const whitelist = src.ip_whitelist ? JSON.parse(src.ip_whitelist) : null;
+    if (!isIpAllowed(ip, whitelist)) {
+      logger.warn(`IP ${ip} not in whitelist for provider ${src.id}`);
+      return { error: { status: 401, body: { success: false, message: 'IP not allowed' } } };
+    }
+    return { providerSource: src, gatewayAccount: null };
+  }
+
+  // 2. Fallback: legacy per-account gateway_token
   const [accounts] = await pool.query(
     'SELECT * FROM hgcash_accounts WHERE gateway_token = ? AND is_active = 1 LIMIT 1',
     [token]
   );
-
   if (!accounts[0]) {
-    logger.warn(`Unknown gateway token: ${token}`);
+    logger.warn(`Unknown token: ${token}`);
     return { error: { status: 200, body: { success: false, message: 'Unknown token' } } };
   }
-
   const gatewayAccount = accounts[0];
-
-  if (gatewayAccount.provider_token && providerToken !== gatewayAccount.provider_token) {
-    logger.warn(`Invalid provider token for account ${gatewayAccount.id}`);
+  if (gatewayAccount.provider_token && providerTokenHeader !== gatewayAccount.provider_token) {
+    logger.warn(`Invalid provider token for legacy account ${gatewayAccount.id}`);
     return { error: { status: 401, body: { success: false, message: 'Invalid provider token' } } };
   }
-
-  return { gatewayAccount };
+  return { providerSource: null, gatewayAccount };
 }
 
-/**
- * Normalize: accept wrapped { provider_event_id, received_by_provider_at, payload }
- * or flat payload directly.
- */
 function normalizePayload(body) {
   if (body.payload && typeof body.payload === 'object' && body.payload.id) {
     return {
@@ -40,11 +54,7 @@ function normalizePayload(body) {
       receivedByProviderAt: body.received_by_provider_at || null,
     };
   }
-  return {
-    movementPayload: body,
-    providerEventId: null,
-    receivedByProviderAt: null,
-  };
+  return { movementPayload: body, providerEventId: null, receivedByProviderAt: null };
 }
 
 async function getMovementWithRelations(movementId) {
@@ -59,30 +69,25 @@ async function getMovementWithRelations(movementId) {
 }
 
 async function enqueueDelivery(movementId, domain) {
-  if (!domain || !domain.id || !domain.destination_webhook_url) return;
+  if (!domain?.id || !domain?.destination_webhook_url) return;
 
   const [domainRows] = await pool.query(
     'SELECT * FROM domains WHERE id = ? AND is_active = 1',
     [domain.id]
   );
-  const activeDomain = domainRows[0];
-  if (!activeDomain) {
-    logger.warn(`No active domain found for id ${domain.id}`);
-    return;
-  }
+  if (!domainRows[0]) return;
 
-  const deliveryId = await createDelivery(movementId, activeDomain.id, activeDomain.destination_webhook_url);
-
-  await webhookQueue.add(
-    'forward',
-    { deliveryId, movementId },
-    { attempts: 5, backoff: { type: 'exponential', delay: 5000 } }
-  );
-
+  const deliveryId = await createDelivery(movementId, domainRows[0].id, domainRows[0].destination_webhook_url);
+  await webhookQueue.add('forward', { deliveryId, movementId }, {
+    attempts: 5,
+    backoff: { type: 'exponential', delay: 5000 },
+  });
   logger.info(`Delivery ${deliveryId} queued for movement ${movementId}`);
 }
 
 async function receiveWebhook(req, res, next) {
+  const ip = extractIp(req);
+
   try {
     const { token } = req.params;
     const providerTokenHeader = req.headers['x-provider-token'];
@@ -92,14 +97,25 @@ async function receiveWebhook(req, res, next) {
       return res.status(400).json({ success: false, message: 'Invalid payload' });
     }
 
-    const { movementPayload, providerEventId, receivedByProviderAt } = normalizePayload(body);
+    const { movementPayload, providerEventId } = normalizePayload(body);
 
     if (!movementPayload.id) {
       return res.status(400).json({ success: false, message: 'Payload id is required' });
     }
 
-    const { gatewayAccount, error } = await validateProviderToken(token, providerTokenHeader);
-    if (error) return res.status(error.status).json(error.body);
+    const { providerSource, gatewayAccount, error } = await resolveAuth(token, providerTokenHeader, ip);
+
+    if (error) {
+      logService.warn({
+        source: 'webhookController',
+        event_type: 'auth_failure',
+        request_id: req.requestId,
+        message: error.body.message,
+        ip_address: ip,
+        metadata: { token: token.substring(0, 8) },
+      });
+      return res.status(error.status).json(error.body);
+    }
 
     const gatewayEventId = uuidv4();
     const resolveResult = await resolveAccountForMovement(movementPayload);
@@ -107,10 +123,14 @@ async function receiveWebhook(req, res, next) {
     const { duplicate, id: movementId } = await saveMovement(
       movementPayload,
       resolveResult,
-      { providerEventId, gatewayEventId, token }
+      {
+        providerEventId,
+        gatewayEventId,
+        token,
+        providerSourceId: providerSource?.id || null,
+      }
     );
 
-    // Respond only after the movement is persisted
     res.status(200).json({ success: true, message: 'Webhook received', gateway_event_id: gatewayEventId });
 
     if (duplicate) {
@@ -126,12 +146,40 @@ async function receiveWebhook(req, res, next) {
         if (resolveResult.resolved) {
           socketService.emit('movement:new', movement);
           await enqueueDelivery(movementId, resolveResult.domain);
+          logService.info({
+            source: 'webhookController',
+            event_type: 'movement_received',
+            request_id: req.requestId,
+            gateway_event_id: gatewayEventId,
+            provider_source_id: providerSource?.id,
+            movement_id: movementId,
+            message: `Movement received and resolved via ${resolveResult.method}`,
+            ip_address: ip,
+          });
         } else {
           socketService.emit('movement:unresolved', movement);
-          logger.warn(`Movement ${movementId} unresolved: ${resolveResult.reason}`);
+          logService.warn({
+            source: 'webhookController',
+            event_type: 'movement_unresolved',
+            request_id: req.requestId,
+            gateway_event_id: gatewayEventId,
+            provider_source_id: providerSource?.id,
+            movement_id: movementId,
+            message: resolveResult.reason,
+            ip_address: ip,
+            metadata: { accountId: movementPayload.accountId },
+          });
         }
       } catch (err) {
         logger.error('Error processing webhook async:', err);
+        logService.error({
+          source: 'webhookController',
+          event_type: 'webhook_processing_error',
+          request_id: req.requestId,
+          gateway_event_id: gatewayEventId,
+          message: err.message,
+          ip_address: ip,
+        });
       }
     });
   } catch (err) {
@@ -140,6 +188,8 @@ async function receiveWebhook(req, res, next) {
 }
 
 async function receiveWebhookUpdate(req, res, next) {
+  const ip = extractIp(req);
+
   try {
     const { token } = req.params;
     const providerTokenHeader = req.headers['x-provider-token'];
@@ -155,11 +205,15 @@ async function receiveWebhookUpdate(req, res, next) {
       return res.status(400).json({ success: false, message: 'Payload id or coelsaCode is required' });
     }
 
-    const { error } = await validateProviderToken(token, providerTokenHeader);
+    const { providerSource, error } = await resolveAuth(token, providerTokenHeader, ip);
     if (error) return res.status(error.status).json(error.body);
 
     const resolveResult = await resolveAccountForMovement(movementPayload);
-    const { id: movementId } = await updateMovement(movementPayload, resolveResult, { providerEventId, token });
+    const { id: movementId } = await updateMovement(movementPayload, resolveResult, {
+      providerEventId,
+      token,
+      providerSourceId: providerSource?.id || null,
+    });
 
     res.status(200).json({ success: true, message: 'Webhook update received' });
 
@@ -168,7 +222,6 @@ async function receiveWebhookUpdate(req, res, next) {
         const movement = await getMovementWithRelations(movementId);
         socketService.emit('movement:updated', movement);
         await invalidateStatsCache();
-
         if (resolveResult.resolved) {
           await enqueueDelivery(movementId, resolveResult.domain);
         }

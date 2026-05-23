@@ -7,6 +7,8 @@ import {
 import {
   TrendingUp, TrendingDown, CheckCircle, ReportProblemOutlined,
   HourglassEmpty, AttachMoney, SwapHoriz, TaskAlt, WarningAmber, BuildCircle,
+  Source, MailOutline, GppMaybe, Shield, SpeedOutlined, RotateRight,
+  ErrorOutline, Block,
 } from '@mui/icons-material';
 import api from '../lib/api';
 import { useSocket } from '../hooks/useSocket';
@@ -110,6 +112,16 @@ export default function Dashboard() {
     { label: 'Pendientes',         value: s?.deliveries.pending,           Icon: HourglassEmpty,          colorKey: 'orange'  },
   ];
 
+  const enterpriseKpis = [
+    { label: 'Proveedores activos', value: s?.providers.active,            Icon: Source,         colorKey: 'indigo'  },
+    { label: 'Dead Letter (DLQ)',   value: s?.deliveries.dead,             Icon: Block,          colorKey: 'violet'  },
+    { label: 'ACK válidos',         value: s?.deliveries.ack_valid,        Icon: MailOutline,    colorKey: 'teal'    },
+    { label: 'ACK inválidos',       value: s?.deliveries.ack_invalid,      Icon: GppMaybe,       colorKey: 'rose'    },
+    { label: 'Rate limits',         value: s?.security.rate_limit_hits,    Icon: SpeedOutlined,  colorKey: 'amber'   },
+    { label: 'Reactivadas',         value: s?.security.reactivated,        Icon: RotateRight,    colorKey: 'green'   },
+    { label: 'Errores webhook',     value: s?.security.webhook_errors,     Icon: ErrorOutline,   colorKey: 'red'     },
+  ];
+
   return (
     <Box sx={{ minWidth: 0 }}>
       <Box sx={{ mb: { xs: 2, sm: 3 } }}>
@@ -125,6 +137,20 @@ export default function Dashboard() {
         {kpis.map((k) => (
           <Grid key={k.label} item xs={6} sm={4} md={3} lg={2.4}>
             <StatCard {...k} loading={loading} accent />
+          </Grid>
+        ))}
+      </Grid>
+
+      <Box sx={{ mb: 0.5 }}>
+        <Typography variant="caption" color="text.secondary"
+          sx={{ textTransform: 'uppercase', letterSpacing: '0.07em', fontSize: '0.65rem', fontWeight: 600 }}>
+          Seguridad &amp; Enterprise
+        </Typography>
+      </Box>
+      <Grid container spacing={{ xs: 1, sm: 1.5 }} sx={{ mb: { xs: 1.5, sm: 2 } }}>
+        {enterpriseKpis.map((k) => (
+          <Grid key={k.label} item xs={6} sm={4} md={3} lg={12/7}>
+            <StatCard {...k} loading={loading} />
           </Grid>
         ))}
       </Grid>

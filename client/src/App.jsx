@@ -9,6 +9,8 @@ import Movements from './pages/Movements';
 import Deliveries from './pages/Deliveries';
 import Accounts from './pages/Accounts';
 import Domains from './pages/Domains';
+import Providers from './pages/Providers';
+import Logs from './pages/Logs';
 import { CircularProgress, Box } from '@mui/material';
 
 function ProtectedRoute({ children }) {
@@ -41,6 +43,8 @@ function AppRoutes() {
       <Route path="/deliveries" element={<ProtectedRoute><Deliveries /></ProtectedRoute>} />
       <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
       <Route path="/domains" element={<ProtectedRoute><Domains /></ProtectedRoute>} />
+      <Route path="/providers" element={<ProtectedRoute><Providers /></ProtectedRoute>} />
+      <Route path="/logs" element={<ProtectedRoute><Logs /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );

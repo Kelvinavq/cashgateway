@@ -3,15 +3,17 @@ import {
   Box, Card, Typography, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, IconButton, Tooltip, Button, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, Switch, FormControlLabel, Grid, Skeleton, Stack,
+  Alert, Divider,
   useMediaQuery, useTheme,
 } from '@mui/material';
-import { Add, Edit, Delete } from '@mui/icons-material';
+import { Add, Edit, Delete, ContentCopy, Refresh, Lock, LockOpen } from '@mui/icons-material';
 import api from '../lib/api';
 import StatusChip from '../components/StatusChip';
 import toast from 'react-hot-toast';
 
 const EMPTY = {
-  name: '', slug: '', base_url: '', destination_webhook_url: '', destination_token: '', is_active: true,
+  name: '', slug: '', base_url: '', destination_webhook_url: '', destination_token: '',
+  require_ack: false, is_active: true,
 };
 
 export default function Domains() {
@@ -24,6 +26,7 @@ export default function Domains() {
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [secretAlert, setSecretAlert] = useState(null); // { domainName, secret }
 
   const fetch = useCallback(async () => {
     setLoading(true);
@@ -45,7 +48,9 @@ export default function Domains() {
       name: row.name, slug: row.slug, base_url: row.base_url,
       destination_webhook_url: row.destination_webhook_url || '',
       destination_token: row.destination_token || '',
+      require_ack: !!row.require_ack,
       is_active: !!row.is_active,
+      _signing_secret_masked: row.gateway_signing_secret || null,
     });
     setDialog(row);
   };
@@ -53,9 +58,13 @@ export default function Domains() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const payload = { ...form, is_active: form.is_active ? 1 : 0 };
+      const { _signing_secret_masked, ...rest } = form;
+      const payload = { ...rest, is_active: form.is_active ? 1 : 0, require_ack: form.require_ack ? 1 : 0 };
       if (dialog === 'create') {
-        await api.post('/domains', payload);
+        const { data } = await api.post('/domains', payload);
+        if (data.data?.gateway_signing_secret) {
+          setSecretAlert({ domainName: form.name, secret: data.data.gateway_signing_secret });
+        }
         toast.success('Dominio creado');
       } else {
         await api.put(`/domains/${dialog.id}`, payload);
@@ -67,6 +76,18 @@ export default function Domains() {
       toast.error(err.response?.data?.message || 'Error al guardar');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleRegenerateSecret = async (id, name) => {
+    try {
+      const { data } = await api.post(`/domains/${id}/regenerate-signing-secret`);
+      setSecretAlert({ domainName: name, secret: data.gateway_signing_secret });
+      toast.success('Firma regenerada');
+      setDialog(null);
+      fetch();
+    } catch {
+      toast.error('Error al regenerar firma');
     }
   };
 
@@ -82,8 +103,9 @@ export default function Domains() {
   };
 
   const field = (k) => ({
-    value: form[k], onChange: e => setForm(p => ({ ...p, [k]: e.target.value })),
+    value: form[k] ?? '', onChange: e => setForm(p => ({ ...p, [k]: e.target.value })),
   });
+  const copy = (text) => { navigator.clipboard.writeText(text); toast.success('Copiado'); };
 
   const hideSm = { display: { xs: 'none', sm: 'table-cell' } };
   const hideMd = { display: { xs: 'none', md: 'table-cell' } };
@@ -97,6 +119,18 @@ export default function Domains() {
         </Button>
       </Box>
 
+      {secretAlert && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          onClose={() => setSecretAlert(null)}
+          action={<Button size="small" onClick={() => copy(secretAlert.secret)}>Copiar</Button>}
+        >
+          <strong>Firma HMAC para "{secretAlert.domainName}" (solo se muestra una vez):</strong>{' '}
+          <code style={{ wordBreak: 'break-all' }}>{secretAlert.secret}</code>
+        </Alert>
+      )}
+
       <Card>
         <TableContainer sx={{ overflowX: 'auto' }}>
           <Table size="small" sx={{ minWidth: 400 }}>
@@ -106,6 +140,8 @@ export default function Domains() {
                 <TableCell sx={hideSm}>Slug</TableCell>
                 <TableCell sx={hideMd}>Base URL</TableCell>
                 <TableCell sx={hideSm}>Webhook Destino</TableCell>
+                <TableCell sx={hideMd}>Firma</TableCell>
+                <TableCell sx={hideMd}>ACK</TableCell>
                 <TableCell>Estado</TableCell>
                 <TableCell align="right">Acc.</TableCell>
               </TableRow>
@@ -114,12 +150,12 @@ export default function Domains() {
               {loading ? (
                 [...Array(3)].map((_, i) => (
                   <TableRow key={i}>
-                    {[...Array(6)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
+                    {[...Array(8)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
                   </TableRow>
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                  <TableCell colSpan={8} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                     No hay dominios. Crea el primero.
                   </TableCell>
                 </TableRow>
@@ -144,6 +180,25 @@ export default function Domains() {
                     <Typography variant="caption" noWrap title={row.destination_webhook_url} display="block">
                       {row.destination_webhook_url || '—'}
                     </Typography>
+                  </TableCell>
+                  <TableCell sx={hideMd}>
+                    {row.gateway_signing_secret ? (
+                      <Tooltip title={row.gateway_signing_secret}>
+                        <Stack direction="row" alignItems="center" spacing={0.5}>
+                          <Lock sx={{ fontSize: 13, color: '#10b981' }} />
+                          <Typography variant="caption" sx={{ fontFamily: 'monospace', fontSize: 10 }}>
+                            {row.gateway_signing_secret.substring(0, 8)}…
+                          </Typography>
+                        </Stack>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip title="Sin firma HMAC">
+                        <LockOpen sx={{ fontSize: 13, color: 'text.disabled' }} />
+                      </Tooltip>
+                    )}
+                  </TableCell>
+                  <TableCell sx={hideMd}>
+                    <StatusChip status={row.require_ack ? 'active' : 'inactive'} />
                   </TableCell>
                   <TableCell><StatusChip status={row.is_active ? 'active' : 'inactive'} /></TableCell>
                   <TableCell align="right">
@@ -203,11 +258,49 @@ export default function Domains() {
                 helperText="Se envía en el header x-gateway-token al destino"
               />
             </Grid>
+
+            {dialog !== 'create' && form._signing_secret_masked && (
+              <>
+                <Grid item xs={12}>
+                  <Divider><Typography variant="caption" color="text.secondary">Seguridad HMAC</Typography></Divider>
+                </Grid>
+                <Grid item xs={12}>
+                  <Stack direction="row" alignItems="center" spacing={1}>
+                    <TextField
+                      label="Firma HMAC (secreto)"
+                      fullWidth
+                      size="small"
+                      value={form._signing_secret_masked}
+                      InputProps={{ readOnly: true, sx: { fontFamily: 'monospace', fontSize: 12 } }}
+                      helperText="Cabecera x-gateway-signature en cada entrega"
+                    />
+                    <Tooltip title="Copiar (enmascarado)">
+                      <IconButton size="small" onClick={() => copy(form._signing_secret_masked)}>
+                        <ContentCopy sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Regenerar secreto">
+                      <IconButton size="small" color="warning"
+                        onClick={() => handleRegenerateSecret(dialog.id, dialog.name)}>
+                        <Refresh sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Tooltip>
+                  </Stack>
+                </Grid>
+              </>
+            )}
+
             <Grid item xs={12}>
-              <FormControlLabel
-                control={<Switch checked={form.is_active} onChange={e => setForm(p => ({ ...p, is_active: e.target.checked }))} />}
-                label="Dominio activo"
-              />
+              <Stack direction="row" spacing={2}>
+                <FormControlLabel
+                  control={<Switch checked={form.require_ack} onChange={e => setForm(p => ({ ...p, require_ack: e.target.checked }))} />}
+                  label="Requerir ACK del destino"
+                />
+                <FormControlLabel
+                  control={<Switch checked={form.is_active} onChange={e => setForm(p => ({ ...p, is_active: e.target.checked }))} />}
+                  label="Dominio activo"
+                />
+              </Stack>
             </Grid>
           </Grid>
         </DialogContent>

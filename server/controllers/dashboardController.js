@@ -9,9 +9,7 @@ async function getStats(req, res, next) {
     const cacheKey = 'dashboard:stats';
     try {
       const cached = await redisClient.get(cacheKey);
-      if (cached) {
-        return res.json({ success: true, data: JSON.parse(cached), cached: true });
-      }
+      if (cached) return res.json({ success: true, data: JSON.parse(cached), cached: true });
     } catch (e) {
       logger.warn('Redis cache miss (error):', e.message);
     }
@@ -30,17 +28,32 @@ async function getStats(req, res, next) {
 
     const [[delStats]] = await pool.query(`
       SELECT
-        SUM(CASE WHEN status = 'success'                    THEN 1 ELSE 0 END) AS delivered_ok,
-        SUM(CASE WHEN status = 'failed'                     THEN 1 ELSE 0 END) AS failed,
-        SUM(CASE WHEN status IN ('pending','processing')    THEN 1 ELSE 0 END) AS pending
+        SUM(CASE WHEN status = 'success'                  THEN 1 ELSE 0 END) AS delivered_ok,
+        SUM(CASE WHEN status = 'failed'                   THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN status IN ('pending','processing')  THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN status = 'dead'                     THEN 1 ELSE 0 END) AS dead,
+        SUM(CASE WHEN ack_valid = 1                       THEN 1 ELSE 0 END) AS ack_valid_count,
+        SUM(CASE WHEN ack_received = 1 AND ack_valid = 0  THEN 1 ELSE 0 END) AS ack_invalid_count
       FROM webhook_deliveries
+    `);
+
+    const [[provStats]] = await pool.query(`
+      SELECT COUNT(*) AS active_providers FROM provider_sources WHERE is_active = 1
+    `);
+
+    const [[logStats]] = await pool.query(`
+      SELECT
+        SUM(CASE WHEN event_type = 'rate_limit_ip' OR event_type = 'rate_limit_provider' THEN 1 ELSE 0 END) AS rate_limit_hits,
+        SUM(CASE WHEN event_type = 'delivery_dead'        THEN 1 ELSE 0 END) AS dead_deliveries_total,
+        SUM(CASE WHEN event_type = 'delivery_reactivated' THEN 1 ELSE 0 END) AS reactivated_total,
+        SUM(CASE WHEN event_type = 'webhook_processing_error' THEN 1 ELSE 0 END) AS webhook_errors
+      FROM system_logs
     `);
 
     const [recentMovements] = await pool.query(`
       SELECT m.id, m.hg_id, m.amount, m.currency, m.direction, m.status,
         m.from_name, m.to_name, m.coelsa_code, m.received_at,
-        m.resolution_status,
-        d.name AS domain_name,
+        m.resolution_status, d.name AS domain_name,
         (SELECT wd.status FROM webhook_deliveries wd WHERE wd.movement_id = m.id ORDER BY wd.created_at DESC LIMIT 1) AS delivery_status
       FROM movements m
       LEFT JOIN domains d ON m.domain_id = d.id
@@ -52,7 +65,7 @@ async function getStats(req, res, next) {
       FROM webhook_deliveries wd
       LEFT JOIN movements m ON wd.movement_id = m.id
       LEFT JOIN domains d ON wd.domain_id = d.id
-      WHERE wd.status = 'failed'
+      WHERE wd.status IN ('failed','dead')
       ORDER BY wd.updated_at DESC LIMIT 5
     `);
 
@@ -67,12 +80,24 @@ async function getStats(req, res, next) {
         manually_resolved:  parseInt(movStats.manually_resolved_count) || 0,
       },
       deliveries: {
-        success: parseInt(delStats.delivered_ok) || 0,
-        failed:  parseInt(delStats.failed)       || 0,
-        pending: parseInt(delStats.pending)      || 0,
+        success:          parseInt(delStats.delivered_ok)     || 0,
+        failed:           parseInt(delStats.failed)           || 0,
+        pending:          parseInt(delStats.pending)          || 0,
+        dead:             parseInt(delStats.dead)             || 0,
+        ack_valid:        parseInt(delStats.ack_valid_count)  || 0,
+        ack_invalid:      parseInt(delStats.ack_invalid_count)|| 0,
       },
-      recent_movements:          recentMovements,
-      recent_failed_deliveries:  recentFailed,
+      providers: {
+        active: parseInt(provStats.active_providers) || 0,
+      },
+      security: {
+        rate_limit_hits:     parseInt(logStats.rate_limit_hits)     || 0,
+        dead_deliveries:     parseInt(logStats.dead_deliveries_total)|| 0,
+        reactivated:         parseInt(logStats.reactivated_total)   || 0,
+        webhook_errors:      parseInt(logStats.webhook_errors)      || 0,
+      },
+      recent_movements:         recentMovements,
+      recent_failed_deliveries: recentFailed,
     };
 
     try {

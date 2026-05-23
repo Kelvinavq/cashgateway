@@ -3,8 +3,9 @@ import {
   Box, Card, Typography, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, TablePagination, IconButton, Tooltip, FormControl, InputLabel,
   Select, MenuItem, Grid, Button, Skeleton, CardContent, useMediaQuery, useTheme,
+  Chip,
 } from '@mui/material';
-import { Refresh } from '@mui/icons-material';
+import { Refresh, RestoreFromTrash, CheckCircleOutline, CancelOutlined } from '@mui/icons-material';
 import api from '../lib/api';
 import StatusChip from '../components/StatusChip';
 import { useSocket } from '../hooks/useSocket';
@@ -57,6 +58,16 @@ export default function Deliveries() {
     }
   };
 
+  const handleReactivate = async (id) => {
+    try {
+      await api.post(`/deliveries/${id}/reactivate`);
+      toast.success('Entrega reactivada');
+      fetchDeliveries();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Error al reactivar');
+    }
+  };
+
   const hideSm = { display: { xs: 'none', sm: 'table-cell' } };
   const hideMd = { display: { xs: 'none', md: 'table-cell' } };
 
@@ -80,6 +91,7 @@ export default function Deliveries() {
                   <MenuItem value="processing">Procesando</MenuItem>
                   <MenuItem value="success">Exitoso</MenuItem>
                   <MenuItem value="failed">Fallido</MenuItem>
+                  <MenuItem value="dead">Dead Letter</MenuItem>
                 </Select>
               </FormControl>
             </Grid>
@@ -107,6 +119,7 @@ export default function Deliveries() {
                 <TableCell sx={hideSm}>Monto</TableCell>
                 <TableCell>Intentos</TableCell>
                 <TableCell sx={hideSm}>HTTP</TableCell>
+                <TableCell sx={hideMd}>ACK</TableCell>
                 <TableCell sx={hideMd}>Último Error</TableCell>
                 <TableCell sx={hideSm}>Actualizado</TableCell>
                 <TableCell align="right">Acc.</TableCell>
@@ -116,17 +129,17 @@ export default function Deliveries() {
               {loading ? (
                 [...Array(5)].map((_, i) => (
                   <TableRow key={i}>
-                    {[...Array(9)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
+                    {[...Array(10)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
                   </TableRow>
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                  <TableCell colSpan={10} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                     Sin entregas
                   </TableCell>
                 </TableRow>
               ) : rows.map(row => (
-                <TableRow key={row.id} hover>
+                <TableRow key={row.id} hover sx={row.status === 'dead' ? { bgcolor: 'rgba(71,85,105,0.06)' } : {}}>
                   <TableCell><StatusChip status={row.status} /></TableCell>
                   <TableCell sx={{ fontSize: 12, ...hideSm }}>{row.domain_name || '—'}</TableCell>
                   <TableCell sx={{ fontSize: 11, fontFamily: 'monospace', ...hideMd }}>
@@ -137,6 +150,21 @@ export default function Deliveries() {
                   </TableCell>
                   <TableCell>{row.attempts}</TableCell>
                   <TableCell sx={hideSm}>{row.last_http_status || '—'}</TableCell>
+                  <TableCell sx={hideMd}>
+                    {row.ack_received ? (
+                      row.ack_valid ? (
+                        <Tooltip title="ACK válido">
+                          <CheckCircleOutline sx={{ fontSize: 16, color: '#10b981' }} />
+                        </Tooltip>
+                      ) : (
+                        <Tooltip title="ACK inválido">
+                          <CancelOutlined sx={{ fontSize: 16, color: '#ef4444' }} />
+                        </Tooltip>
+                      )
+                    ) : (
+                      <Typography variant="caption" color="text.disabled">—</Typography>
+                    )}
+                  </TableCell>
                   <TableCell sx={{ fontSize: 11, maxWidth: 200, ...hideMd }}>
                     <Typography variant="caption" title={row.last_error}>
                       {row.last_error?.substring(0, 60) || '—'}
@@ -146,7 +174,13 @@ export default function Deliveries() {
                     {formatDate(row.updated_at)}
                   </TableCell>
                   <TableCell align="right">
-                    {row.status !== 'success' && (
+                    {row.status === 'dead' ? (
+                      <Tooltip title="Reactivar (reiniciar DLQ)">
+                        <IconButton size="small" color="warning" onClick={() => handleReactivate(row.id)}>
+                          <RestoreFromTrash fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    ) : row.status !== 'success' && (
                       <Tooltip title="Reintentar entrega">
                         <IconButton size="small" color="primary" onClick={() => handleRetry(row.id)}>
                           <Refresh fontSize="small" />

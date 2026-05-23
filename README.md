@@ -1,14 +1,19 @@
 # HG.Cash Webhook Gateway
 
-Gateway centralizado para recibir, procesar y reenviar webhooks de HG.Cash desde un proveedor externo hacia múltiples dominios/proyectos.
+Gateway centralizado para recibir, procesar y reenviar webhooks de HG.Cash desde proveedores externos hacia múltiples dominios/proyectos.
 
 ## Arquitectura
 
 ```
-HG.Cash → Proveedor Externo → [Este Gateway] → Dominio/Proyecto Final
+Proveedor Externo → [Este Gateway] → Dominio/Proyecto Final
+        ↑                   ↓
+   Auth por token      MySQL + Redis
+   IP whitelist        BullMQ (colas)
+   Rate limiting       Socket.IO (tiempo real)
+   HMAC signing
 ```
 
-El proveedor externo reenvía los webhooks de todas las cuentas HG.Cash a este gateway. El gateway identifica la cuenta por `accountId` (con fallback por CBU y CUIT), registra el movimiento y reenvía al dominio correspondiente con reintentos automáticos. Los movimientos que no pueden resolverse se guardan como `unresolved` para asignación manual.
+El proveedor externo reenvía los webhooks de todas las cuentas HG.Cash a este gateway. El gateway autentica al proveedor por token (con verificación de IP), identifica la cuenta por `accountId` (con fallback por CBU y CUIT), registra el movimiento y reenvía al dominio correspondiente firmando el payload con HMAC. Los movimientos no resueltos quedan pendientes de asignación manual.
 
 ## Stack
 
@@ -20,31 +25,36 @@ El proveedor externo reenvía los webhooks de todas las cuentas HG.Cash a este g
 | Cola/Reintentos | BullMQ + Redis |
 | Tiempo real | Socket.IO |
 | Auth | JWT (cookie HTTP-only, 1 hora) + bcrypt |
-| Seguridad | Helmet, CORS, rate-limit, express-validator |
+| Rate limiting | rate-limiter-flexible + Redis |
+| Logging | Pino + tabla `system_logs` en MySQL |
+| Seguridad | Helmet, CORS, HMAC SHA256, IP whitelist CIDR |
 
 ## Estructura del proyecto
 
 ```
 cashgateway/
-├── alters.sql              # Schema MySQL completo + seed data
+├── alters.sql              # Schema MySQL inicial
 ├── migration_v2.sql        # Migración v2: resolución de movimientos
-├── server/                 # Backend Express
+├── migration_v3.sql        # Migración v3: enterprise features
+├── server/
 │   ├── app.js
 │   ├── server.js
 │   ├── config/             # env, database, redis
-│   ├── controllers/        # auth, webhook, movements, accounts, domains, dashboard, deliveries
+│   ├── controllers/        # auth, webhook, movements, accounts, domains,
+│   │                       # dashboard, deliveries, providers
 │   ├── routes/             # Un archivo por recurso
-│   ├── services/           # accountResolver, movement, webhookForward, socket, stats
+│   ├── services/           # accountResolver, movement, webhookForward,
+│   │                       # socket, stats, logService
 │   ├── queues/             # webhookQueue (BullMQ), webhookWorker
-│   ├── middlewares/        # auth, error, rawBody
-│   └── utils/              # hmac, logger, validators
-└── client/                 # Frontend React + Vite
-    └── src/
-        ├── contexts/       # Auth, Theme
-        ├── pages/          # Login, Dashboard, Movements, Deliveries, Accounts, Domains
-        ├── components/     # Layout, StatusChip
-        ├── hooks/          # useSocket
-        └── lib/            # api (axios), socket (socket.io-client)
+│   ├── middlewares/        # auth, error, rawBody, requestId, providerRateLimit
+│   └── utils/              # hmac, logger (Pino), ipValidator
+└── client/src/
+    ├── contexts/           # Auth, Theme
+    ├── pages/              # Login, Dashboard, Movements, Deliveries,
+    │                       # Accounts, Domains, Providers, Logs
+    ├── components/         # Layout, StatusChip
+    ├── hooks/              # useSocket
+    └── lib/                # api (axios), socket (socket.io-client)
 ```
 
 ## Requisitos previos
@@ -58,11 +68,14 @@ cashgateway/
 ### 1. Base de datos
 
 ```bash
-# Schema inicial (crea la DB, tablas, índices y seed data):
+# Schema inicial
 mysql -u root -p < alters.sql
 
-# Migración v2 (agrega campos de resolución a movements):
+# Migración v2: resolución de movimientos
 mysql -u root -p hgcash_gateway < migration_v2.sql
+
+# Migración v3: enterprise features (provider_sources, system_logs, HMAC, DLQ, ACK)
+mysql -u root -p hgcash_gateway < migration_v3.sql
 ```
 
 Seed data incluido:
@@ -77,7 +90,7 @@ cd server
 npm install
 
 cp .env.example .env
-# Editar server/.env con tus credenciales MySQL y JWT_SECRET
+# Editar server/.env
 
 npm run dev       # Servidor API
 npm run worker    # Worker de colas (en otra terminal)
@@ -121,43 +134,40 @@ Abrir: http://localhost:5173
 | `VITE_API_URL` | `http://localhost:3000/api` |
 | `VITE_SOCKET_URL` | `http://localhost:3000` |
 
-## Cómo registrar una cuenta y recibir webhooks
+## Configuración inicial
 
-### Paso 1 — Crear dominio
+### Paso 1 — Crear un Proveedor (v3)
 
-En la sección **Dominios** del panel, crear un dominio con:
-- Nombre, slug
-- `destination_webhook_url`: URL a la que el gateway enviará los webhooks
-- `destination_token`: token que se enviará en el header `x-gateway-token`
+En la sección **Proveedores** del panel:
+- Crear un proveedor con nombre e IP whitelist opcional
+- El sistema genera automáticamente un token seguro
+- El token **solo se muestra una vez** — cópialo inmediatamente
 
-### Paso 2 — Crear cuenta HG.Cash
+### Paso 2 — Crear dominio
 
-En la sección **Cuentas** del panel, crear una cuenta asociada al dominio:
-- `account_id`: el UUID de la cuenta en HG.Cash (campo `accountId` del payload)
-- `cbu` y `cuit` opcionales (usados como fallback de resolución)
+En **Dominios**:
+- `destination_webhook_url`: URL destino
+- `destination_token`: token enviado en `x-gateway-token`
+- `gateway_signing_secret`: generado automáticamente (usado para `x-gateway-signature`)
+- `require_ack`: si el destino debe confirmar recepción con `{received: true, ...}`
 
-### Paso 3 — Configurar el proveedor externo
+### Paso 3 — Crear cuenta HG.Cash
 
-El proveedor debe enviar sus webhooks a:
+En **Cuentas**:
+- `account_id`: UUID de la cuenta en HG.Cash
+- `cbu` / `cuit`: opcionales (fallback de resolución)
+- Asociar al dominio correspondiente
+
+### Paso 4 — Configurar el proveedor externo
+
+El proveedor debe enviar a:
 ```
-POST https://tu-gateway/api/webhooks/provider/hgcash/{gateway_token}
+POST https://tu-gateway/api/webhooks/provider/hgcash/{token_del_proveedor}
 ```
-donde `{gateway_token}` es el token de la cuenta HG.Cash.
 
-### Paso 4 — Resolución automática
+Donde `{token_del_proveedor}` es el token generado en el Paso 1.
 
-Cuando llega un webhook, el gateway:
-1. Busca cuenta activa por `payload.accountId`
-2. Si no encuentra, busca por `payload.toCBU`
-3. Si no encuentra, busca por `payload.toCUIT`
-4. Si no encuentra → guarda como `unresolved`
-
-### Paso 5 — Movimientos no resueltos
-
-Los movimientos `unresolved` aparecen destacados en la página de Movimientos. Para resolverlos manualmente:
-1. Clic en el ícono de llave (🔧) en la fila
-2. Seleccionar la cuenta HG.Cash destino
-3. Confirmar → el gateway reenvía inmediatamente al dominio
+---
 
 ## Endpoints
 
@@ -178,15 +188,16 @@ GET /api/dashboard/stats
 GET  /api/movements                     # Paginado + filtros
 GET  /api/movements/:id                 # Detalle
 GET  /api/movements/:id/deliveries      # Historial de entregas
-POST /api/movements/:id/resolve         # Resolver manualmente (body: { hgcash_account_id })
+POST /api/movements/:id/resolve         # Resolver manualmente { hgcash_account_id }
 ```
 
-**Filtros disponibles:** `page`, `limit`, `domain_id`, `hgcash_account_id`, `account_id`, `direction`, `delivery_status`, `resolution_status`, `resolution_method`, `coelsa_code`, `cuit`, `cbu`, `date_from`, `date_to`, `amount_min`, `amount_max`
+**Filtros:** `page`, `limit`, `domain_id`, `hgcash_account_id`, `account_id`, `direction`, `delivery_status`, `resolution_status`, `resolution_method`, `coelsa_code`, `cuit`, `cbu`, `date_from`, `date_to`, `amount_min`, `amount_max`
 
 ### Entregas
 ```
 GET  /api/deliveries                    # Paginado + filtro por status
-POST /api/deliveries/:id/retry          # Reintentar manualmente
+POST /api/deliveries/:id/retry          # Reintentar (bloqueado si status=dead)
+POST /api/deliveries/:id/reactivate     # Reactivar desde Dead Letter Queue
 ```
 
 ### Cuentas HG
@@ -197,107 +208,270 @@ PUT    /api/accounts/:id
 DELETE /api/accounts/:id
 ```
 
-Campos: `name`, `account_id` (obligatorio y único), `cuit`, `cbu`, `alias`, `domain_id` (obligatorio), `is_active`
-
 ### Dominios
 ```
 GET    /api/domains
 POST   /api/domains
 PUT    /api/domains/:id
 DELETE /api/domains/:id
+POST   /api/domains/:id/regenerate-signing-secret
 ```
 
-Campos: `name`, `slug`, `base_url`, `destination_webhook_url`, `destination_token`, `is_active`
+### Proveedores (v3)
+```
+GET    /api/providers
+POST   /api/providers                    # Retorna token completo (solo una vez)
+PUT    /api/providers/:id
+DELETE /api/providers/:id
+POST   /api/providers/:id/regenerate-token
+```
+
+### Logs del sistema (v3)
+```
+GET /api/logs   ?level=&source=&event_type=&date_from=&date_to=&page=&limit=
+```
 
 ### Webhook (recepción desde proveedor)
 ```
-POST /api/webhooks/provider/hgcash/:gateway_token          # Movimiento nuevo
-POST /api/webhooks/provider/hgcash/:gateway_token/update   # Update de movimiento
+POST /api/webhooks/provider/hgcash/:token          # Movimiento nuevo
+POST /api/webhooks/provider/hgcash/:token/update   # Update de movimiento existente
 ```
 
-Headers esperados:
-- `x-provider-token`: Token del proveedor (si la cuenta lo tiene configurado)
+---
 
 ## Flujo del webhook
 
 ```
-1. Proveedor externo  →  POST /api/webhooks/provider/hgcash/{gateway_token}
-2. Gateway valida gateway_token (+ optional x-provider-token header)
-3. Normaliza payload: acepta wrapper {provider_event_id, payload} o payload plano
-4. Genera gateway_event_id (UUID único)
-5. Resuelve cuenta/dominio: accountId → toCBU → toCUIT
-6. Guarda movimiento en MySQL con resolution_status
-7. Responde 200 (después de guardar en DB)
-   ↓
+1. Proveedor → POST /api/webhooks/provider/hgcash/{token}
+2. Rate limiting: 100 req/min por proveedor, 300 req/min por IP
+3. Autenticación:
+   a. Busca token en provider_sources (nuevo sistema)
+   b. Fallback: busca en hgcash_accounts.gateway_token (legado)
+4. Verificación de IP whitelist (si configurada, soporta CIDR)
+5. Normaliza payload: acepta {provider_event_id, payload} o payload plano
+6. Genera gateway_event_id (UUID único)
+7. Deduplicación: rechaza si hg_id o provider_event_id ya existen
+8. Resolución de cuenta: accountId → toCBU → toCUIT
+9. Guarda movimiento en MySQL (con resolution_status + provider_source_id)
+10. Responde 200 { success, gateway_event_id }
+
    Si RESOLVED:
      → Crea webhook_delivery
      → Encola en BullMQ (Redis)
-     → Worker hace POST al domain.destination_webhook_url
-     → Emite evento Socket.IO movement:new
-     → Reintento exponencial hasta 5 veces si falla
+     → Worker: POST al domain.destination_webhook_url con headers firmados
+     → Si require_ack: valida respuesta {received: true, gateway_event_id, processed: true}
+     → Reintento exponencial (hasta 5 intentos)
+     → Al 5to fallo: status = 'dead' (Dead Letter Queue)
+     → Emite Socket.IO: movement:new
 
    Si UNRESOLVED:
      → Guarda unresolved_reason
-     → Emite evento Socket.IO movement:unresolved
-     → Aparece en dashboard y tabla con badge rojo
-     → Admin resuelve manualmente → reenvía
+     → Emite Socket.IO: movement:unresolved
+     → Admin resuelve manualmente → reenvía inmediatamente
 ```
 
-## Payload del proveedor — formatos aceptados
+---
 
-### Con wrapper
-```json
-{
-  "provider_event_id": "prov_abc_123",
-  "received_by_provider_at": "2026-05-16T14:36:59-03:00",
-  "payload": {
-    "id": "b1642cbc-9458-4f08-aae2-72c285783fda",
-    "amount": "1000",
-    "currency": "ARS",
-    "direction": "Inbound",
-    "status": "done",
-    "type": "inbound",
-    "date": "2026-05-16T14:36:59",
-    "timezone": "America/Argentina/Buenos_Aires",
-    "fromName": "Matias Ariel Herrera",
-    "toName": "AGROFORESTAL PAMPA S.A",
-    "fromCBU": "0000003100060633019400",
-    "toCBU": "0000151500036579912174",
-    "fromCUIT": "23370206309",
-    "toCUIT": "30718856740",
-    "coelsaCode": "WGRXJE27DPD7L566N7MYQL",
-    "accountId": "c68ec492-6a49-40f1-8060-7c1cb38ac1f9"
+## Proveedores y Autenticación (v3)
+
+Los proveedores reemplazan el sistema de autenticación por token por cuenta:
+
+| Campo | Descripción |
+|-------|-------------|
+| `name` | Nombre identificador |
+| `token` | Token de autenticación (generado automáticamente, 32 bytes hex) |
+| `ip_whitelist` | Array JSON de IPs/CIDRs permitidas (vacío = cualquier IP) |
+| `is_active` | Habilitado/deshabilitado |
+
+**Backward compatibility:** Si el token no pertenece a ningún proveedor, el gateway busca en `hgcash_accounts.gateway_token` (sistema legado).
+
+---
+
+## Firma HMAC de entregas (v3)
+
+Cuando un dominio tiene `gateway_signing_secret` configurado, cada entrega incluye:
+
+```
+x-gateway-signature: sha256=<HMAC-SHA256>
+x-gateway-timestamp: <unix_timestamp>
+```
+
+### Verificación en el dominio destino (Node.js)
+
+```javascript
+const crypto = require('crypto');
+
+function verifyGatewaySignature(req) {
+  const secret = process.env.GATEWAY_SIGNING_SECRET;
+  const signature = req.headers['x-gateway-signature'];
+  const timestamp = req.headers['x-gateway-timestamp'];
+
+  if (!signature || !timestamp) return false;
+
+  // Prevenir replay attacks (5 min de tolerancia)
+  const age = Math.abs(Date.now() / 1000 - parseInt(timestamp));
+  if (age > 300) return false;
+
+  const body = JSON.stringify(req.body);
+  const expected = 'sha256=' + crypto
+    .createHmac('sha256', secret)
+    .update(body)
+    .digest('hex');
+
+  return crypto.timingSafeEqual(
+    Buffer.from(signature),
+    Buffer.from(expected)
+  );
+}
+
+app.post('/webhooks/hgcash', express.json(), (req, res) => {
+  if (!verifyGatewaySignature(req)) {
+    return res.status(401).json({ error: 'Invalid signature' });
   }
+  // Procesar el webhook...
+});
+```
+
+### Verificación en el dominio destino (PHP)
+
+```php
+function verifyGatewaySignature(string $body, array $headers, string $secret): bool {
+    $signature = $headers['x-gateway-signature'] ?? '';
+    $timestamp  = $headers['x-gateway-timestamp']  ?? 0;
+
+    $age = abs(time() - (int)$timestamp);
+    if ($age > 300) return false;
+
+    $expected = 'sha256=' . hash_hmac('sha256', $body, $secret);
+    return hash_equals($expected, $signature);
 }
 ```
 
-### Plano (sin wrapper)
+---
+
+## Validación ACK (v3)
+
+Si un dominio tiene `require_ack = 1`, el gateway espera esta respuesta del destino:
+
 ```json
 {
-  "id": "b1642cbc-9458-4f08-aae2-72c285783fda",
-  "amount": "1000",
-  "accountId": "c68ec492-6a49-40f1-8060-7c1cb38ac1f9",
-  ...
+  "received": true,
+  "gateway_event_id": "<el mismo que envió el gateway>",
+  "processed": true
 }
 ```
 
-## Ejemplo curl
+Si la respuesta es inválida o no incluye `processed: true`, la entrega se marca con `ack_valid = 0` y se reintenta. Activar esto solo en integraciones de confianza.
+
+---
+
+## Rate Limiting (v3)
+
+| Límite | Clave | Ventana |
+|--------|-------|---------|
+| 100 req/min | Por proveedor (`provider_id`) | 60 segundos |
+| 300 req/min | Por IP | 60 segundos |
+
+Al exceder el límite, la respuesta es `HTTP 429 Too Many Requests`. Los eventos de rate limiting se registran en `system_logs` con `event_type: rate_limit_provider` o `rate_limit_ip`. Si Redis no está disponible, el rate limiter falla abierto (permite la request).
+
+---
+
+## Dead Letter Queue (v3)
+
+Después de 5 intentos fallidos, una entrega pasa a estado `dead`:
+- No se reintenta automáticamente
+- Aparece en la página de Entregas con filtro "Dead Letter"
+- Puede reactivarse manualmente desde el panel: `POST /api/deliveries/:id/reactivate`
+- La reactivación reinicia el contador de intentos y vuelve a encolar
+
+---
+
+## Logs del sistema (v3)
+
+Todos los eventos significativos se persisten en la tabla `system_logs`:
+
+| `event_type` | Descripción |
+|-------------|-------------|
+| `webhook_received` | Webhook recibido del proveedor |
+| `movement_unresolved` | Movimiento sin cuenta/dominio asignable |
+| `delivery_success` | Entrega exitosa |
+| `delivery_retry` | Reintento de entrega |
+| `delivery_dead` | Entrega enviada a DLQ |
+| `delivery_reactivated` | Entrega reactivada desde DLQ |
+| `rate_limit_provider` | Rate limit por proveedor |
+| `rate_limit_ip` | Rate limit por IP |
+| `webhook_processing_error` | Error al procesar webhook |
+
+Los logs son visibles en la página **Logs** del panel con filtros por nivel, source y tipo de evento.
+
+---
+
+## Headers enviados al dominio destino
+
+| Header | Valor |
+|--------|-------|
+| `Content-Type` | `application/json` |
+| `x-gateway-token` | `domain.destination_token` |
+| `x-gateway-event-id` | UUID generado por el gateway |
+| `x-provider-event-id` | ID del proveedor (si existe) |
+| `x-hg-movement-id` | ID interno del movimiento |
+| `x-hg-account-id` | `accountId` del payload original |
+| `x-hg-account-db-id` | ID de la cuenta en la DB del gateway |
+| `x-domain-id` | ID del dominio en la DB del gateway |
+| `x-coelsa-code` | Código COELSA del movimiento |
+| `x-gateway-timestamp` | Unix timestamp de la entrega |
+| `x-gateway-signature` | `sha256=<HMAC>` (solo si el dominio tiene secreto) |
+
+---
+
+## Eventos Socket.IO
+
+| Evento | Cuándo se emite |
+|--------|-----------------|
+| `movement:new` | Nuevo movimiento resuelto |
+| `movement:unresolved` | Movimiento sin resolución automática |
+| `movement:resolved` | Movimiento asignado manualmente |
+| `movement:updated` | Update de movimiento existente |
+| `delivery:updated` | Cambio de estado en una entrega |
+| `stats:updated` | Estadísticas del dashboard invalidadas |
+
+---
+
+## Estados de resolución de movimientos
+
+| Estado | Descripción |
+|--------|-------------|
+| `resolved` | Resuelto automáticamente |
+| `unresolved` | Sin cuenta/dominio → pendiente de asignación |
+| `manually_resolved` | Asignado manualmente por un administrador |
+
+## Estados de entregas
+
+| Estado | Descripción |
+|--------|-------------|
+| `pending` | En cola, esperando ser procesada |
+| `processing` | En proceso |
+| `success` | Entregada exitosamente |
+| `failed` | Falló, con reintentos restantes |
+| `dead` | Agotó todos los intentos → Dead Letter Queue |
+
+---
+
+## Ejemplo curl con proveedor (v3)
 
 ```bash
-curl -X POST http://localhost:3000/api/webhooks/provider/hgcash/gw-token-agroforestal-2024 \
+# Usando token de provider_source (nuevo sistema)
+curl -X POST https://tu-gateway/api/webhooks/provider/hgcash/TOKEN_DEL_PROVEEDOR \
   -H "Content-Type: application/json" \
-  -H "x-provider-token: prov-token-123" \
   -d '{
-    "provider_event_id": "prov_123",
+    "provider_event_id": "prov_abc_123",
     "received_by_provider_at": "2026-05-16T14:36:59-03:00",
     "payload": {
       "id": "b1642cbc-9458-4f08-aae2-72c285783fda",
-      "externalID": "E-WGRXJE27DPD7L566N7MYQL-2026-05-16 14:36:59",
       "amount": "1000",
       "currency": "ARS",
       "direction": "Inbound",
       "status": "done",
-      "type": "inbound",
       "date": "2026-05-16T14:36:59",
       "timezone": "America/Argentina/Buenos_Aires",
       "fromName": "Matias Ariel Herrera",
@@ -312,51 +486,18 @@ curl -X POST http://localhost:3000/api/webhooks/provider/hgcash/gw-token-agrofor
   }'
 ```
 
-Respuesta esperada:
+Respuesta:
 ```json
 { "success": true, "message": "Webhook received", "gateway_event_id": "uuid-generado" }
 ```
 
-## Headers enviados al dominio destino
-
-Cuando el gateway reenvía el webhook al dominio:
-
-| Header | Valor |
-|--------|-------|
-| `x-gateway-token` | `domain.destination_token` |
-| `x-gateway-event-id` | UUID generado por el gateway |
-| `x-provider-event-id` | ID del proveedor (si existe) |
-| `x-hg-movement-id` | ID interno del movimiento |
-| `x-hg-account-id` | `accountId` del payload |
-| `x-hg-account-db-id` | ID de la cuenta en la DB del gateway |
-| `x-domain-id` | ID del dominio en la DB del gateway |
-| `x-coelsa-code` | Código COELSA del movimiento |
-
-## Eventos Socket.IO
-
-| Evento | Cuándo se emite |
-|--------|-----------------|
-| `movement:new` | Nuevo movimiento resuelto |
-| `movement:unresolved` | Movimiento no pudo resolverse |
-| `movement:resolved` | Movimiento asignado manualmente |
-| `movement:updated` | Update de movimiento existente |
-| `delivery:updated` | Cambio de estado en una entrega |
-| `stats:updated` | Estadísticas del dashboard invalidadas |
-
-## Estados de resolución
-
-| Estado | Descripción |
-|--------|-------------|
-| `resolved` | Resuelto automáticamente por accountId, CBU o CUIT |
-| `unresolved` | No se encontró cuenta/dominio → pendiente de asignación manual |
-| `manually_resolved` | Asignado manualmente por un administrador |
+---
 
 ## Producción con PM2
 
 ```bash
-# Backend API
 pm2 start ecosystem.config.cjs
 
-# Worker (separado)
+# Worker separado
 cd server && pm2 start --name "gateway-worker" npm -- run worker
 ```

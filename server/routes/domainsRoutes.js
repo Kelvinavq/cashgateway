@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { list, create, update, remove } = require('../controllers/domainsController');
+const { list, create, update, regenerateSigningSecret, remove } = require('../controllers/domainsController');
 const { authMiddleware } = require('../middlewares/authMiddleware');
 const { domainValidation } = require('../utils/validators');
 const { validationResult } = require('express-validator');
@@ -14,6 +14,7 @@ router.use(authMiddleware);
 router.get('/', list);
 router.post('/', domainValidation, validate, create);
 router.put('/:id', domainValidation, validate, update);
+router.post('/:id/regenerate-signing-secret', regenerateSigningSecret);
 router.delete('/:id', remove);
 
 module.exports = router;

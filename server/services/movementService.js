@@ -27,7 +27,7 @@ async function saveMovement(movementPayload, resolveResult, meta = {}) {
     accountId,
   } = movementPayload;
 
-  const { providerEventId = null, gatewayEventId, token = null } = meta;
+  const { providerEventId = null, gatewayEventId, token = null, providerSourceId = null } = meta;
   const { resolved, method, account, reason } = resolveResult;
 
   const now = new Date();
@@ -55,7 +55,7 @@ async function saveMovement(movementPayload, resolveResult, meta = {}) {
 
   const [result] = await pool.query(
     `INSERT INTO movements
-      (provider_event_id, gateway_event_id,
+      (provider_source_id, provider_event_id, gateway_event_id,
        hg_id, external_id, account_id, hgcash_account_id, domain_id,
        amount, currency, direction, status, type,
        movement_date, timezone, from_name, to_name,
@@ -64,7 +64,7 @@ async function saveMovement(movementPayload, resolveResult, meta = {}) {
        provider_token_id, received_from_provider_at, raw_payload, received_at,
        created_at, updated_at)
      VALUES
-      (?, ?,
+      (?, ?, ?,
        ?, ?, ?, ?, ?,
        ?, ?, ?, ?, ?,
        ?, ?, ?, ?,
@@ -73,6 +73,7 @@ async function saveMovement(movementPayload, resolveResult, meta = {}) {
        ?, ?, ?, ?,
        NOW(), NOW())`,
     [
+      providerSourceId || null,
       providerEventId,
       gatewayEventId,
       hg_id,
