@@ -22,6 +22,7 @@ El proveedor externo reenvía los webhooks de todas las cuentas HG.Cash a este g
 - Endpoint público para proveedores: `POST https://flowhg.online/api/webhooks/provider/hgcash/{provider_token}`
 
 El proveedor externo solo conoce el endpoint público de `flowhg.online`. No necesita ni debe usar el subdominio del panel.
+Si alguien entra directamente a `https://flowhg.online/` o a una ruta no API desde el navegador, el backend responde con un 404 genérico. No redirige al panel ni expone `admin.flowhg.online`.
 
 Variables clave en producción:
 

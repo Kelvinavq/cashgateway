@@ -3,9 +3,13 @@ require('dotenv').config();
 const nodeEnv = process.env.NODE_ENV || 'development';
 const isProduction = nodeEnv === 'production';
 const frontendUrl = process.env.FRONTEND_URL || (isProduction ? 'https://admin.flowhg.online' : 'http://localhost:5173');
+const productionOrigins = isProduction
+  ? ['https://admin.flowhg.online']
+  : ['http://localhost:5173', 'http://127.0.0.1:5173'];
+
 const allowedOrigins = Array.from(new Set([
   frontendUrl,
-  ...(isProduction ? [] : ['http://localhost:5173', 'http://127.0.0.1:5173']),
+  ...productionOrigins,
 ].filter(Boolean)));
 
 module.exports = {

@@ -7,6 +7,7 @@ const pinoHttp = require('pino-http');
 const env = require('./config/env');
 const logger = require('./utils/logger');
 const requestId = require('./middlewares/requestId');
+const redirectFrontendMiddleware = require('./middlewares/redirectFrontendMiddleware');
 const { errorMiddleware, notFoundMiddleware } = require('./middlewares/errorMiddleware');
 
 // Routes
@@ -56,6 +57,7 @@ app.use(express.json({
   verify: (req, _res, buf) => { req.rawBody = buf; },
 }));
 app.use(express.urlencoded({ extended: true }));
+app.use(redirectFrontendMiddleware);
 
 // Routes
 app.use('/api/auth',       authRoutes);
