@@ -15,6 +15,63 @@ Proveedor Externo → [Este Gateway] → Dominio/Proyecto Final
 
 El proveedor externo reenvía los webhooks de todas las cuentas HG.Cash a este gateway. El gateway autentica al proveedor por token (con verificación de IP), resuelve primero por `destination_domains[]`, luego `destination_domain`, luego `domain`, y si no hay destino explícito aplica el fallback por `accountId` → `toCBU` → `toCUIT`. Después registra el movimiento y reenvía al dominio correspondiente firmando el payload con HMAC. Los movimientos no resueltos quedan pendientes de asignación manual.
 
+## Producción recomendada
+
+- Panel/admin: `https://admin.flowhg.online`
+- API pública y webhooks: `https://flowhg.online`
+- Endpoint público para proveedores: `POST https://flowhg.online/api/webhooks/provider/hgcash/{provider_token}`
+
+El proveedor externo solo conoce el endpoint público de `flowhg.online`. No necesita ni debe usar el subdominio del panel.
+
+Variables clave en producción:
+
+- `FRONTEND_URL=https://admin.flowhg.online`
+- `PUBLIC_WEBHOOK_BASE_URL=https://flowhg.online`
+- `COOKIE_DOMAIN=.flowhg.online`
+- `VITE_API_URL=https://flowhg.online/api`
+- `VITE_SOCKET_URL=https://flowhg.online`
+
+### Nginx de ejemplo
+
+```nginx
+server {
+    server_name flowhg.online;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /socket.io/ {
+        proxy_pass http://127.0.0.1:3000/socket.io/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Los webhooks públicos llegan por /api/webhooks/provider/hgcash/:token
+}
+
+server {
+    server_name admin.flowhg.online;
+
+    root /home/flowhg/cashgateway/client/dist;
+    index index.html;
+
+    location / {
+        try_files $uri /index.html;
+    }
+}
+```
+
 ## Stack
 
 | Capa | Tecnología |
@@ -117,7 +174,7 @@ Abrir: http://localhost:5173
 |----------|-------------------|-------------|
 | `PORT` | `3000` | Puerto del servidor |
 | `NODE_ENV` | `development` | Entorno |
-| `FRONTEND_URL` | `http://localhost:5173` | URL frontend (para CORS) |
+| `FRONTEND_URL` | `http://localhost:5173` | URL del panel frontend. En producción: `https://admin.flowhg.online` |
 | `MYSQL_HOST` | `localhost` | Host MySQL |
 | `MYSQL_PORT` | `3306` | Puerto MySQL |
 | `MYSQL_USER` | `root` | Usuario MySQL |
@@ -126,16 +183,17 @@ Abrir: http://localhost:5173
 | `JWT_SECRET` | ⚠️ cambiar | Clave JWT |
 | `JWT_EXPIRES_IN` | `1h` | Expiración JWT |
 | `COOKIE_NAME` | `hgcash_gateway_token` | Nombre de la cookie |
+| `COOKIE_DOMAIN` | _(vacío)_ | Dominio de cookie para producción. En producción: `.flowhg.online` |
 | `REDIS_HOST` | `127.0.0.1` | Host Redis |
 | `REDIS_PORT` | `6379` | Puerto Redis |
-| `PUBLIC_WEBHOOK_BASE_URL` | `https://flowhg.online` | Base URL pública del gateway |
+| `PUBLIC_WEBHOOK_BASE_URL` | `http://localhost:3000` | Base URL pública del gateway. En producción: `https://flowhg.online` |
 
 ### Frontend (`client/.env`)
 
 | Variable | Valor |
 |----------|-------|
-| `VITE_API_URL` | `http://localhost:3000/api` |
-| `VITE_SOCKET_URL` | `http://localhost:3000` |
+| `VITE_API_URL` | `http://localhost:3000/api` | En producción: `https://flowhg.online/api` |
+| `VITE_SOCKET_URL` | `http://localhost:3000` | En producción: `https://flowhg.online` |
 
 ## Configuración inicial
 
@@ -166,10 +224,10 @@ En **Cuentas**:
 
 El proveedor debe enviar a:
 ```
-POST https://tu-gateway/api/webhooks/provider/hgcash/{token_del_proveedor}
+POST https://flowhg.online/api/webhooks/provider/hgcash/{token_del_proveedor}
 ```
 
-Donde `{token_del_proveedor}` es el token generado en el Paso 1.
+Donde `{token_del_proveedor}` es el token generado en el Paso 1. El proveedor no necesita conocer `admin.flowhg.online`.
 
 ---
 

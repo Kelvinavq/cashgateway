@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { signWebhookPayload } = require('../utils/hmac');
+const { normalizeDomain } = require('../utils/domainNormalizer');
 const logger = require('../utils/logger');
 
 /**
@@ -24,7 +25,7 @@ async function forwardWebhook(delivery, movement, domain) {
   const headers = {
     'Content-Type':            'application/json',
     'x-gateway-token':         domain.destination_token || '',
-    'x-destination-domain':    domain.hostname || '',
+    'x-destination-domain':    domain.hostname || normalizeDomain(domain.base_url) || '',
     'x-destination-domain-id': domain.id ? String(domain.id) : '',
     'x-destination-domain-name': domain.name || '',
     'x-gateway-event-id':      movement.gateway_event_id || '',

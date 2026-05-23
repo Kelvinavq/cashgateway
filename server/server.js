@@ -8,10 +8,14 @@ const socketService = require('./services/socketService');
 const logger = require('./utils/logger');
 
 const server = http.createServer(app);
+const isAllowedOrigin = (origin) => !origin || env.allowedOrigins.includes(origin);
 
 const io = new Server(server, {
   cors: {
-    origin: env.frontendUrl,
+    origin: (origin, callback) => {
+      if (isAllowedOrigin(origin)) return callback(null, true);
+      return callback(new Error(`Socket CORS blocked for origin: ${origin}`));
+    },
     credentials: true,
     methods: ['GET', 'POST'],
   },

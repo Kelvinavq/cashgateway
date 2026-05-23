@@ -21,6 +21,7 @@ const providersRoutes  = require('./routes/providersRoutes');
 const logsRoutes       = require('./routes/logsRoutes');
 
 const app = express();
+const isAllowedOrigin = (origin) => !origin || env.allowedOrigins.includes(origin);
 
 // Request ID (must be first)
 app.use(requestId);
@@ -36,7 +37,10 @@ app.use(pinoHttp({
 app.use(helmet());
 app.set('trust proxy', 1); // Trust first proxy for correct req.ip
 app.use(cors({
-  origin: env.frontendUrl,
+  origin: (origin, callback) => {
+    if (isAllowedOrigin(origin)) return callback(null, true);
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-provider-token', 'x-HG-Webhook-Signature'],

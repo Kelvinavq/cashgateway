@@ -6,9 +6,19 @@ const logger = require('../utils/logger');
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
-  secure: env.nodeEnv === 'production',
-  sameSite: env.nodeEnv === 'production' ? 'strict' : 'lax',
-  maxAge: 60 * 60 * 1000, // 1 hour
+  secure: env.cookie.secure,
+  sameSite: env.cookie.sameSite,
+  domain: env.cookie.domain,
+  path: env.cookie.path,
+  maxAge: env.cookie.maxAge,
+};
+
+const CLEAR_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: env.cookie.secure,
+  sameSite: env.cookie.sameSite,
+  domain: env.cookie.domain,
+  path: env.cookie.path,
 };
 
 async function login(req, res, next) {
@@ -43,7 +53,7 @@ async function login(req, res, next) {
 }
 
 async function logout(req, res) {
-  res.clearCookie(env.cookie.name);
+  res.clearCookie(env.cookie.name, CLEAR_COOKIE_OPTIONS);
   res.json({ success: true, message: 'Logged out' });
 }
 
