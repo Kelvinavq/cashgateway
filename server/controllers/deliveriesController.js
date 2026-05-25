@@ -12,6 +12,9 @@ async function list(req, res, next) {
     if (status) { conditions.push('wd.status = ?'); params.push(status); }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const hasProviderStatus = await hasColumn('movements', 'provider_status');
+    const hasDeliveryKind = await hasColumn('webhook_deliveries', 'delivery_kind');
+    const hasInitialDeliveredAt = await hasColumn('webhook_deliveries', 'initial_delivered_at');
+    const hasLastUpdateDeliveredAt = await hasColumn('webhook_deliveries', 'last_update_delivered_at');
     const hasDomainHostname = await hasColumn('domains', 'hostname');
     const [[{ total }]] = await pool.query(
       `SELECT COUNT(*) AS total FROM webhook_deliveries wd ${where}`,
@@ -19,7 +22,12 @@ async function list(req, res, next) {
     );
     const [rows] = await pool.query(`
       SELECT wd.*, m.hg_id, m.amount, m.currency, m.direction, m.coelsa_code,
-        m.gateway_event_id, ${hasProviderStatus ? 'm.provider_status AS provider_status,' : 'NULL AS provider_status,'} d.name AS domain_name,
+        m.gateway_event_id,
+        ${hasProviderStatus ? 'm.provider_status AS provider_status,' : 'NULL AS provider_status,'}
+        ${hasDeliveryKind ? 'wd.delivery_kind AS delivery_kind,' : "'initial' AS delivery_kind,"}
+        ${hasInitialDeliveredAt ? 'wd.initial_delivered_at AS initial_delivered_at,' : 'NULL AS initial_delivered_at,'}
+        ${hasLastUpdateDeliveredAt ? 'wd.last_update_delivered_at AS last_update_delivered_at,' : 'NULL AS last_update_delivered_at,'}
+        d.name AS domain_name,
         ${hasDomainHostname ? 'd.hostname AS domain_hostname' : 'NULL AS domain_hostname'}
       FROM webhook_deliveries wd
       LEFT JOIN movements m ON wd.movement_id = m.id
@@ -50,11 +58,17 @@ async function retry(req, res, next) {
     if (delivery.status === 'dead') {
       return res.status(400).json({ success: false, message: 'Use /reactivate for dead deliveries' });
     }
+    const hasDeliveryKind = await hasColumn('webhook_deliveries', 'delivery_kind');
     await pool.query(
-      "UPDATE webhook_deliveries SET status='pending', next_retry_at=NULL, updated_at=NOW() WHERE id=?",
+      `UPDATE webhook_deliveries
+          SET status='pending',
+              next_retry_at=NULL,
+              ${hasDeliveryKind ? "delivery_kind='manual_retry'," : ''}
+              updated_at=NOW()
+        WHERE id=?`,
       [id]
     );
-    await webhookQueue.add('forward', { deliveryId: id, movementId: delivery.movement_id }, {
+    await webhookQueue.add('forward', { deliveryId: id, movementId: delivery.movement_id, deliveryKind: 'manual_retry' }, {
       attempts: 5, backoff: { type: 'exponential', delay: 5000 },
     });
     res.json({ success: true, message: 'Retry queued' });
@@ -73,15 +87,16 @@ async function reactivate(req, res, next) {
       return res.status(400).json({ success: false, message: 'Only dead deliveries can be reactivated' });
     }
 
+    const hasDeliveryKind = await hasColumn('webhook_deliveries', 'delivery_kind');
     await pool.query(
       `UPDATE webhook_deliveries
        SET status='pending', attempts=0, dead_at=NULL, next_retry_at=NULL,
-           last_error=NULL, updated_at=NOW()
+           last_error=NULL, ${hasDeliveryKind ? "delivery_kind='manual_retry'," : ''} updated_at=NOW()
        WHERE id=?`,
       [id]
     );
 
-    await webhookQueue.add('forward', { deliveryId: id, movementId: delivery.movement_id }, {
+    await webhookQueue.add('forward', { deliveryId: id, movementId: delivery.movement_id, deliveryKind: 'manual_retry' }, {
       attempts: 5, backoff: { type: 'exponential', delay: 5000 },
     });
 

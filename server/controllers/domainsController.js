@@ -46,6 +46,7 @@ async function list(req, res, next) {
 async function create(req, res, next) {
   try {
     const { name, slug, base_url, hostname: explicitHostname, destination_webhook_url, destination_token, require_ack = 0, is_active = 1 } = req.body;
+    const resolvedDestinationToken = String(destination_token || '').trim() || generateToken(32);
     const gateway_signing_secret = generateToken(32);
     const hostname = resolveHostname(base_url, explicitHostname);
     const hasHostname = await hasColumn('domains', 'hostname');
@@ -56,8 +57,8 @@ async function create(req, res, next) {
       ? '(name, slug, base_url, hostname, destination_webhook_url, destination_token, gateway_signing_secret, require_ack, is_active)'
       : '(name, slug, base_url, destination_webhook_url, destination_token, gateway_signing_secret, require_ack, is_active)';
     const values = hasHostname
-      ? [name, slug, base_url, hostname, destination_webhook_url, destination_token || null, gateway_signing_secret, require_ack ? 1 : 0, is_active ? 1 : 0]
-      : [name, slug, base_url, destination_webhook_url, destination_token || null, gateway_signing_secret, require_ack ? 1 : 0, is_active ? 1 : 0];
+      ? [name, slug, base_url, hostname, destination_webhook_url, resolvedDestinationToken, gateway_signing_secret, require_ack ? 1 : 0, is_active ? 1 : 0]
+      : [name, slug, base_url, destination_webhook_url, resolvedDestinationToken, gateway_signing_secret, require_ack ? 1 : 0, is_active ? 1 : 0];
     const [result] = await pool.query(
       `INSERT INTO domains ${fields} VALUES (${values.map(() => '?').join(', ')})`,
       values
@@ -65,7 +66,14 @@ async function create(req, res, next) {
     const safeFields = await getSafeFields();
     const [rows] = await pool.query(`SELECT ${safeFields} FROM domains WHERE id = ?`, [result.insertId]);
     // Return full secret once on creation
-    res.status(201).json({ success: true, data: { ...hydrateDomainRow(rows[0]), gateway_signing_secret } });
+    res.status(201).json({
+      success: true,
+      data: {
+        ...hydrateDomainRow(rows[0]),
+        destination_token: resolvedDestinationToken,
+        gateway_signing_secret,
+      },
+    });
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') {
       if (String(err.sqlMessage || '').includes('uq_domains_hostname')) {

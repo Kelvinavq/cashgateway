@@ -19,6 +19,9 @@ async function getStats(req, res, next) {
     const hasDestinationDomainsRaw = await hasColumn('movements', 'destination_domains_raw');
     const hasProviderStatus = await hasColumn('movements', 'provider_status');
     const hasDomainHostname = await hasColumn('domains', 'hostname');
+    const hasDeliveryKind = await hasColumn('webhook_deliveries', 'delivery_kind');
+    const hasInitialDeliveredAt = await hasColumn('webhook_deliveries', 'initial_delivered_at');
+    const hasLastUpdateDeliveredAt = await hasColumn('webhook_deliveries', 'last_update_delivered_at');
 
     const movementsSelectParts = [
       'COUNT(*) AS total_movements',
@@ -78,7 +81,10 @@ async function getStats(req, res, next) {
         SUM(CASE WHEN status IN ('pending','processing')  THEN 1 ELSE 0 END) AS pending,
         SUM(CASE WHEN status = 'dead'                     THEN 1 ELSE 0 END) AS dead,
         SUM(CASE WHEN ack_valid = 1                       THEN 1 ELSE 0 END) AS ack_valid_count,
-        SUM(CASE WHEN ack_received = 1 AND ack_valid = 0  THEN 1 ELSE 0 END) AS ack_invalid_count
+        SUM(CASE WHEN ack_received = 1 AND ack_valid = 0  THEN 1 ELSE 0 END) AS ack_invalid_count,
+        ${hasDeliveryKind ? "SUM(CASE WHEN delivery_kind = 'initial' AND status = 'success' THEN 1 ELSE 0 END)" : '0'} AS initial_success_count,
+        ${hasDeliveryKind ? "SUM(CASE WHEN delivery_kind = 'update' AND status = 'success' THEN 1 ELSE 0 END)" : '0'} AS update_success_count,
+        ${hasLastUpdateDeliveredAt ? 'SUM(CASE WHEN last_update_delivered_at IS NOT NULL THEN 1 ELSE 0 END)' : '0'} AS updates_delivered_count
       FROM webhook_deliveries
     `);
 
@@ -114,7 +120,10 @@ async function getStats(req, res, next) {
     `);
 
     const [recentFailed] = await pool.query(`
-      SELECT wd.*, m.hg_id, m.amount, m.currency, d.name AS domain_name
+      SELECT wd.*, m.hg_id, m.amount, m.currency, ${hasProviderStatus ? 'm.provider_status,' : 'NULL AS provider_status,'} d.name AS domain_name
+        ${hasDeliveryKind ? ', wd.delivery_kind' : ", 'initial' AS delivery_kind"}
+        ${hasInitialDeliveredAt ? ', wd.initial_delivered_at' : ', NULL AS initial_delivered_at'}
+        ${hasLastUpdateDeliveredAt ? ', wd.last_update_delivered_at' : ', NULL AS last_update_delivered_at'}
       FROM webhook_deliveries wd
       LEFT JOIN movements m ON wd.movement_id = m.id
       LEFT JOIN domains d ON wd.domain_id = d.id
@@ -145,6 +154,9 @@ async function getStats(req, res, next) {
         dead:             parseInt(delStats.dead)             || 0,
         ack_valid:        parseInt(delStats.ack_valid_count)  || 0,
         ack_invalid:      parseInt(delStats.ack_invalid_count)|| 0,
+        initial_success:  parseInt(delStats.initial_success_count) || 0,
+        update_success:   parseInt(delStats.update_success_count) || 0,
+        updates_delivered: parseInt(delStats.updates_delivered_count) || 0,
         multi_destination: parseInt(multiDeliveryStats.multi_destination_deliveries) || 0,
       },
       providers: {

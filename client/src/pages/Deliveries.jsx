@@ -20,6 +20,13 @@ function formatAmount(n) {
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 0 }).format(n || 0);
 }
 
+const DELIVERY_KIND_LABELS = {
+  initial: 'Alta',
+  update: 'Update',
+  manual_retry: 'Reintento',
+  manual_resolve: 'Manual',
+};
+
 export default function Deliveries() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -120,6 +127,7 @@ export default function Deliveries() {
                 <TableHead>
                   <TableRow>
                     <TableCell>Estado</TableCell>
+                    <TableCell>Tipo</TableCell>
                     <TableCell sx={hideSm}>Dominio</TableCell>
                     <TableCell sx={hideMd}>Movimiento</TableCell>
                     <TableCell sx={hideSm}>Estado proveedor</TableCell>
@@ -127,6 +135,7 @@ export default function Deliveries() {
                     <TableCell>Intentos</TableCell>
                     <TableCell sx={hideSm}>HTTP</TableCell>
                     <TableCell sx={hideMd}>ACK</TableCell>
+                    <TableCell sx={hideMd}>Entregado</TableCell>
                     <TableCell sx={hideMd}>Último Error</TableCell>
                 <TableCell sx={hideSm}>Actualizado</TableCell>
                 <TableCell align="right">Acciones</TableCell>
@@ -136,12 +145,12 @@ export default function Deliveries() {
                   {loading ? (
                     [...Array(5)].map((_, i) => (
                       <TableRow key={i}>
-                        {[...Array(11)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
+                        {[...Array(13)].map((_, j) => <TableCell key={j}><Skeleton /></TableCell>)}
                       </TableRow>
                     ))
                   ) : rows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={11}>
+                      <TableCell colSpan={13}>
                     <Box sx={{ py: 6, textAlign: 'center' }}>
                       <Box sx={{
                         width: 52, height: 52, borderRadius: '14px',
@@ -161,6 +170,16 @@ export default function Deliveries() {
                   ) : rows.map(row => (
                     <TableRow key={row.id} hover sx={row.status === 'dead' ? { bgcolor: 'rgba(71,85,105,0.05)' } : {}}>
                       <TableCell><StatusChip status={row.status} /></TableCell>
+                      <TableCell>
+                        <Typography variant="caption" sx={{
+                          px: 0.75, py: 0.25, borderRadius: 1,
+                          bgcolor: row.delivery_kind === 'update' ? 'rgba(59,130,246,0.12)' : 'rgba(16,185,129,0.10)',
+                          color: row.delivery_kind === 'update' ? '#93c5fd' : '#86efac',
+                          fontWeight: 700,
+                        }}>
+                          {DELIVERY_KIND_LABELS[row.delivery_kind] || row.delivery_kind || 'Alta'}
+                        </Typography>
+                      </TableCell>
                       <TableCell sx={{ fontSize: 12, ...hideSm }}>
                     <Stack spacing={0.25}>
                       <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
@@ -196,6 +215,12 @@ export default function Deliveries() {
                     ) : (
                       <Typography variant="caption" color="text.disabled">—</Typography>
                     )}
+                  </TableCell>
+                  <TableCell sx={{ fontSize: 11, whiteSpace: 'nowrap', color: 'text.secondary', ...hideMd }}>
+                    <Stack spacing={0.25}>
+                      <Typography variant="caption">Alta: {formatDate(row.initial_delivered_at)}</Typography>
+                      <Typography variant="caption">Upd: {formatDate(row.last_update_delivered_at)}</Typography>
+                    </Stack>
                   </TableCell>
                   <TableCell sx={{ fontSize: 11, maxWidth: 200, ...hideMd }}>
                     <Typography variant="caption" title={row.last_error}>

@@ -172,16 +172,63 @@ function buildStoredResolutionResult(existingMovement, domains) {
   };
 }
 
-async function queueDeliveriesForMovement({ movementId, movement, resolveResult, providerSourceId, requestId, ip }) {
+async function requeueExistingDeliveriesForUpdate({ movementId, domainIds, providerStatus }) {
+  const uniqueDomainIds = [...new Set((domainIds || []).map(Number).filter(Boolean))];
+  if (!uniqueDomainIds.length) return [];
+
+  const placeholders = uniqueDomainIds.map(() => '?').join(', ');
+  const [rows] = await pool.query(
+    `SELECT id, domain_id
+       FROM webhook_deliveries
+      WHERE movement_id = ? AND domain_id IN (${placeholders})`,
+    [movementId, ...uniqueDomainIds]
+  );
+
+  if (!rows.length) return [];
+
+  const hasProviderStatus = await hasColumn('webhook_deliveries', 'provider_status');
+  const hasDeliveryKind = await hasColumn('webhook_deliveries', 'delivery_kind');
+
+  for (const row of rows) {
+    const setParts = [
+      "status = 'pending'",
+      'next_retry_at = NULL',
+      'last_error = NULL',
+      'updated_at = NOW()',
+    ];
+    const params = [];
+    if (hasProviderStatus) {
+      setParts.push('provider_status = ?');
+      params.push(normalizeProviderStatus(providerStatus));
+    }
+    if (hasDeliveryKind) {
+      setParts.push("delivery_kind = 'update'");
+    }
+
+    await pool.query(
+      `UPDATE webhook_deliveries SET ${setParts.join(', ')} WHERE id = ?`,
+      [...params, row.id]
+    );
+
+    await webhookQueue.add('forward', { deliveryId: row.id, movementId, deliveryKind: 'update' }, {
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 5000 },
+    });
+  }
+
+  return rows.map(row => row.id);
+}
+
+async function queueDeliveriesForMovement({ movementId, movement, resolveResult, providerSourceId, requestId, ip, requeueExisting = false, deliveryKind = 'initial' }) {
   const createdDeliveries = [];
   const skippedDomains = [];
 
   if (resolveResult?.domains?.length) {
-    const { created, skipped } = await syncDeliveriesForMovement(movementId, resolveResult.domains);
+    const { created, skipped } = await syncDeliveriesForMovement(movementId, resolveResult.domains, movement.provider_status, deliveryKind);
 
     for (const item of created) {
       createdDeliveries.push(item.deliveryId);
-      await webhookQueue.add('forward', { deliveryId: item.deliveryId, movementId }, {
+      await webhookQueue.add('forward', { deliveryId: item.deliveryId, movementId, deliveryKind }, {
         attempts: 5,
         backoff: { type: 'exponential', delay: 5000 },
       });
@@ -189,14 +236,24 @@ async function queueDeliveriesForMovement({ movementId, movement, resolveResult,
 
     if (skipped.length) {
       skippedDomains.push(...skipped);
+      const requeuedDeliveryIds = requeueExisting
+        ? await requeueExistingDeliveriesForUpdate({
+          movementId,
+          domainIds: skipped,
+          providerStatus: movement.provider_status || resolveResult?.providerStatus || null,
+        })
+        : [];
+
       logService.info({
         source: 'webhookController',
-        event_type: 'delivery_duplicate_skipped',
+        event_type: requeueExisting ? 'delivery_update_requeued' : 'delivery_duplicate_skipped',
         request_id: requestId,
         gateway_event_id: movement.gateway_event_id,
         provider_source_id: providerSourceId || null,
         movement_id: movementId,
-        message: `Duplicate delivery skipped for movement ${movementId}`,
+        message: requeueExisting
+          ? `Existing deliveries requeued for movement update ${movementId}`
+          : `Duplicate delivery skipped for movement ${movementId}`,
         ip_address: ip,
         metadata: {
           domains: resolveResult.domains.map(d => ({
@@ -205,6 +262,7 @@ async function queueDeliveriesForMovement({ movementId, movement, resolveResult,
             name: d.name,
           })),
           skipped_domain_ids: skipped,
+          requeued_delivery_ids: requeuedDeliveryIds,
           provider_status: movement.provider_status || resolveResult?.providerStatus || null,
         },
       });
@@ -306,7 +364,7 @@ function logDestinationResolution({ movement, resolveResult, providerSourceId, r
   }
 }
 
-async function processPersistedMovement({ movementId, providerSourceId, requestId, ip, resolved, movementPayload, resolveResult, socketEvent }) {
+async function processPersistedMovement({ movementId, providerSourceId, requestId, ip, resolved, movementPayload, resolveResult, socketEvent, requeueExistingDeliveries = false, deliveryKind = 'initial' }) {
   let movement = await getMovementWithRelations(movementId);
   await invalidateStatsCache();
 
@@ -318,6 +376,8 @@ async function processPersistedMovement({ movementId, providerSourceId, requestI
       providerSourceId,
       requestId,
       ip,
+      requeueExisting: requeueExistingDeliveries,
+      deliveryKind,
     });
     movement = await getMovementWithRelations(movementId);
     socketService.emit(socketEvent, buildSocketMovementPayload(movement, resolveResult));
@@ -528,6 +588,8 @@ async function receiveWebhookUpdate(req, res, next) {
           movementPayload,
           resolveResult,
           socketEvent: 'movement:updated',
+          requeueExistingDeliveries: true,
+          deliveryKind: 'update',
         });
 
         if (movement) {

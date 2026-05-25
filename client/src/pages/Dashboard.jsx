@@ -1,75 +1,103 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Box, Grid, Card, CardContent, Typography, Skeleton,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Stack,
+  Box, Button, Card, CardContent, Grid, LinearProgress, Skeleton, Stack,
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip,
+  Typography,
 } from '@mui/material';
 import {
-  TrendingUp, TrendingDown, CheckCircle, ReportProblemOutlined,
-  HourglassEmpty, AttachMoney, SwapHoriz, TaskAlt, WarningAmber, BuildCircle,
-  Source, MailOutlined, GppMaybe, SpeedOutlined, RotateRight,
-  ErrorOutlined, Block, Send, CancelOutlined,
+  AccountTreeOutlined, AccessTime, CheckCircle, ErrorOutlined, GppMaybe,
+  HubOutlined, PaidOutlined, Refresh, ReportProblemOutlined, SendOutlined,
+  ShieldOutlined, SpeedOutlined, SwapHoriz, TaskAlt, TrendingUp,
 } from '@mui/icons-material';
 import api from '../lib/api';
 import { useSocket } from '../hooks/useSocket';
 import StatusChip from '../components/StatusChip';
 import toast from 'react-hot-toast';
 
-const CARD_COLORS = {
-  indigo:  { icon: '#6366f1', bg: 'rgba(99,102,241,0.12)'  },
-  green:   { icon: '#10b981', bg: 'rgba(16,185,129,0.12)'  },
-  amber:   { icon: '#f59e0b', bg: 'rgba(245,158,11,0.12)'  },
-  cyan:    { icon: '#06b6d4', bg: 'rgba(6,182,212,0.12)'   },
-  emerald: { icon: '#10b981', bg: 'rgba(16,185,129,0.12)'  },
-  red:     { icon: '#ef4444', bg: 'rgba(239,68,68,0.12)'   },
-  orange:  { icon: '#f97316', bg: 'rgba(249,115,22,0.12)'  },
-  teal:    { icon: '#14b8a6', bg: 'rgba(20,184,166,0.12)'  },
-  rose:    { icon: '#f43f5e', bg: 'rgba(244,63,94,0.12)'   },
-  violet:  { icon: '#8b5cf6', bg: 'rgba(139,92,246,0.12)'  },
+const tone = {
+  blue:   { main: '#3b82f6', soft: 'rgba(59,130,246,0.10)',  line: 'rgba(59,130,246,0.22)',  dim: 'rgba(59,130,246,0.04)'  },
+  green:  { main: '#10b981', soft: 'rgba(16,185,129,0.10)',  line: 'rgba(16,185,129,0.22)',  dim: 'rgba(16,185,129,0.04)'  },
+  amber:  { main: '#f59e0b', soft: 'rgba(245,158,11,0.10)',  line: 'rgba(245,158,11,0.22)',  dim: 'rgba(245,158,11,0.04)'  },
+  red:    { main: '#ef4444', soft: 'rgba(239,68,68,0.10)',   line: 'rgba(239,68,68,0.22)',   dim: 'rgba(239,68,68,0.04)'   },
+  violet: { main: '#8b5cf6', soft: 'rgba(139,92,246,0.10)',  line: 'rgba(139,92,246,0.22)',  dim: 'rgba(139,92,246,0.04)'  },
+  cyan:   { main: '#06b6d4', soft: 'rgba(6,182,212,0.10)',   line: 'rgba(6,182,212,0.22)',   dim: 'rgba(6,182,212,0.04)'   },
+  slate:  { main: '#64748b', soft: 'rgba(100,116,139,0.10)', line: 'rgba(100,116,139,0.18)', dim: 'rgba(100,116,139,0.03)' },
 };
 
-function StatCard({ label, value, Icon, colorKey = 'indigo', loading, accent }) {
-  const c = CARD_COLORS[colorKey];
+const providerStatus = {
+  pending:  { label: 'Pendiente', color: tone.amber.main, bg: tone.amber.soft },
+  paid:     { label: 'Pagado',    color: tone.green.main, bg: tone.green.soft },
+  rejected: { label: 'Rechazado', color: tone.red.main,   bg: tone.red.soft   },
+};
+
+function n(v) { return Number(v || 0); }
+function pct(part, total) {
+  const b = n(total);
+  return b ? Math.max(0, Math.min(100, Math.round((n(part) / b) * 100))) : 0;
+}
+function fmtNum(v) { return new Intl.NumberFormat('es-AR').format(n(v)); }
+function fmtARS(v) {
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency', currency: 'ARS',
+    minimumFractionDigits: 0, maximumFractionDigits: 0,
+  }).format(n(v));
+}
+function fmtDate(v) {
+  if (!v) return '-';
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+function MetricCard({ label, value, hint, Icon, color = 'blue', loading }) {
+  const c = tone[color] || tone.blue;
   return (
-    <Card sx={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
-      {accent && (
-        <Box sx={{
-          position: 'absolute', top: 0, left: 0, right: 0, height: '3px',
-          background: `linear-gradient(90deg, ${c.icon} 0%, ${c.icon}50 60%, transparent 100%)`,
-        }} />
-      )}
-      <CardContent sx={{ p: { xs: '14px !important', sm: '16px !important' } }}>
-        <Stack direction="row" alignItems="center" spacing={1.5}>
-          <Box sx={{
-            width: 38, height: 38, borderRadius: '10px',
-            background: `linear-gradient(135deg, ${c.bg} 0%, ${c.icon}18 100%)`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0,
-            boxShadow: `0 3px 10px ${c.icon}20`,
-          }}>
-            <Icon sx={{ fontSize: 18, color: c.icon }} />
-          </Box>
-          <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography
-              variant="caption"
-              sx={{ display: 'block', mb: 0.25, fontWeight: 500, fontSize: '0.68rem', color: 'text.secondary' }}
-              noWrap
-            >
+    <Card sx={{
+      height: '100%',
+      position: 'relative',
+      overflow: 'hidden',
+      transition: 'transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
+      '&:hover': {
+        transform: 'translateY(-2px)',
+        boxShadow: `0 8px 28px ${c.soft}`,
+        borderColor: c.line,
+      },
+    }}>
+      <Box sx={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+        background: `linear-gradient(90deg, ${c.main}bb, ${c.main})`,
+        borderRadius: '2px 2px 0 0',
+      }} />
+      <CardContent sx={{ pt: 2.5, px: { xs: 1.75, sm: 2 }, pb: '18px !important' }}>
+        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1.5}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography sx={{
+              color: 'text.secondary', fontSize: '0.64rem', fontWeight: 700,
+              textTransform: 'uppercase', letterSpacing: '0.09em', mb: 1.25,
+            }}>
               {label}
             </Typography>
             {loading ? (
-              <Skeleton width={48} height={26} sx={{ transform: 'none' }} />
+              <Skeleton width={110} height={38} sx={{ transform: 'none', borderRadius: 1 }} />
             ) : (
               <Typography sx={{
-                fontWeight: 800,
-                fontSize: { xs: '1.2rem', sm: '1.35rem' },
-                lineHeight: 1,
-                color: c.icon,
-                letterSpacing: '-0.02em',
+                fontSize: { xs: '1.65rem', md: '1.9rem' }, fontWeight: 900, lineHeight: 1,
+                fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em',
               }}>
-                {value ?? '—'}
+                {value}
               </Typography>
             )}
+            {hint && (
+              <Typography sx={{ color: 'text.secondary', fontSize: '0.69rem', mt: 1, lineHeight: 1.45 }}>
+                {hint}
+              </Typography>
+            )}
+          </Box>
+          <Box sx={{
+            width: 42, height: 42, borderRadius: 2,
+            bgcolor: c.soft, border: `1px solid ${c.line}`, color: c.main,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            <Icon sx={{ fontSize: 22 }} />
           </Box>
         </Stack>
       </CardContent>
@@ -77,384 +105,551 @@ function StatCard({ label, value, Icon, colorKey = 'indigo', loading, accent }) 
   );
 }
 
-function SectionLabel({ label, accentColor = '#6366f1' }) {
+function Panel({ title, subtitle, action, children, noPad, sx }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
+    <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', ...sx }}>
       <Box sx={{
-        width: '3px', height: 14, borderRadius: '2px',
-        background: `linear-gradient(180deg, ${accentColor}, ${accentColor}60)`,
-        flexShrink: 0,
-      }} />
-      <Typography sx={{
-        fontSize: '0.6rem', fontWeight: 700,
-        textTransform: 'uppercase', letterSpacing: '0.1em',
-        color: 'text.disabled',
+        px: 2, py: 1.5,
+        borderBottom: '1px solid', borderColor: 'divider',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 1.5, flexShrink: 0,
       }}>
-        {label}
-      </Typography>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontWeight: 800, fontSize: '0.87rem', lineHeight: 1.2 }}>
+            {title}
+          </Typography>
+          {subtitle && (
+            <Typography sx={{ color: 'text.secondary', fontSize: '0.68rem', mt: 0.3, lineHeight: 1.3 }}>
+              {subtitle}
+            </Typography>
+          )}
+        </Box>
+        {action && (
+          <Box sx={{
+            width: 30, height: 30, borderRadius: 1.5, bgcolor: 'action.hover',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            {action}
+          </Box>
+        )}
+      </Box>
+      <Box sx={{ p: noPad ? 0 : 2, flex: 1, overflow: 'hidden' }}>
+        {children}
+      </Box>
+    </Card>
+  );
+}
+
+function ProgressRow({ label, value, total, color = 'blue', trailing, loading }) {
+  const c = tone[color] || tone.blue;
+  const percent = pct(value, total);
+  return (
+    <Box sx={{ mb: 1.65, '&:last-child': { mb: 0 } }}>
+      <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} sx={{ mb: 0.75 }}>
+        <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary', fontWeight: 600 }}>
+          {label}
+        </Typography>
+        <Stack direction="row" spacing={0.6} alignItems="baseline">
+          {loading ? (
+            <Skeleton width={54} height={15} sx={{ transform: 'none' }} />
+          ) : (
+            <>
+              <Typography sx={{ fontSize: '0.78rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
+                {trailing ?? fmtNum(value)}
+              </Typography>
+              {!trailing && (
+                <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: c.main }}>
+                  {percent}%
+                </Typography>
+              )}
+            </>
+          )}
+        </Stack>
+      </Stack>
+      <Box sx={{ height: 6, borderRadius: 99, bgcolor: 'action.hover', overflow: 'hidden' }}>
+        <Box sx={{
+          height: '100%',
+          width: loading ? 0 : `${percent}%`,
+          borderRadius: 99,
+          background: `linear-gradient(90deg, ${c.main}99, ${c.main})`,
+          transition: 'width 0.7s cubic-bezier(0.4,0,0.2,1)',
+        }} />
+      </Box>
     </Box>
   );
 }
 
-function ProviderStatusChip({ status }) {
-  const map = {
-    pending: { label: 'Pendiente', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
-    paid: { label: 'Pagado', color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
-    rejected: { label: 'Rechazado', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
-  };
-  const c = map[status] || { label: status || '—', color: '#64748b', bg: 'rgba(100,116,139,0.12)' };
+function StatBlock({ label, value, color = 'blue', Icon, loading }) {
+  const c = tone[color] || tone.blue;
+  return (
+    <Box sx={{
+      p: 1.2, borderRadius: 1.5,
+      border: '1px solid', borderColor: 'divider',
+      display: 'flex', alignItems: 'center', gap: 1.1,
+      transition: 'border-color 0.15s, background-color 0.15s',
+      '&:hover': { borderColor: c.line, bgcolor: c.dim },
+    }}>
+      {Icon && (
+        <Box sx={{
+          width: 30, height: 30, borderRadius: 1.25,
+          bgcolor: c.soft, color: c.main,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        }}>
+          <Icon sx={{ fontSize: 15 }} />
+        </Box>
+      )}
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography sx={{
+          color: c.main, fontWeight: 900, fontSize: '1.05rem',
+          lineHeight: 1, fontVariantNumeric: 'tabular-nums',
+        }}>
+          {loading ? <Skeleton width={30} height={18} sx={{ transform: 'none' }} /> : fmtNum(value)}
+        </Typography>
+        <Typography sx={{ color: 'text.secondary', fontSize: '0.64rem', mt: 0.35, fontWeight: 600, lineHeight: 1.2 }}>
+          {label}
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
+
+function ProviderChip({ status }) {
+  const c = providerStatus[status] || { label: status || '-', color: tone.slate.main, bg: tone.slate.soft };
   return (
     <Box component="span" sx={{
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '5px',
-      px: '8px',
-      py: '3px',
-      borderRadius: '6px',
-      fontSize: '0.688rem',
-      fontWeight: 600,
-      bgcolor: c.bg,
-      color: c.color,
-      border: `1px solid ${c.color}22`,
-      whiteSpace: 'nowrap',
+      display: 'inline-flex', alignItems: 'center', gap: 0.5,
+      px: 0.85, py: 0.3, borderRadius: 0.75,
+      bgcolor: c.bg, color: c.color,
+      fontWeight: 700, fontSize: '0.65rem', whiteSpace: 'nowrap',
     }}>
-      <Box component="span" sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'currentColor' }} />
+      <Box component="span" sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: 'currentColor', flexShrink: 0 }} />
       {c.label}
     </Box>
   );
 }
 
-function fmtARS(n) {
-  if (!n) return '$0';
-  return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 0 }).format(n);
+function EmptyState({ icon: Icon, title, text }) {
+  return (
+    <Box sx={{ py: 5, textAlign: 'center' }}>
+      <Box sx={{
+        width: 42, height: 42, mx: 'auto', mb: 1.5, borderRadius: 2,
+        bgcolor: tone.green.soft, color: tone.green.main,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Icon sx={{ fontSize: 20 }} />
+      </Box>
+      <Typography sx={{ fontWeight: 700, fontSize: '0.84rem', mb: 0.4 }}>{title}</Typography>
+      {text && <Typography sx={{ color: 'text.secondary', fontSize: '0.72rem', lineHeight: 1.4 }}>{text}</Typography>}
+    </Box>
+  );
 }
-function fmtDate(d) {
-  if (!d) return '—';
-  return new Date(d).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' });
-}
+
+const TABLE_COLS = ['Fecha', 'Dominio', 'Monto', 'Proveedor', 'Resolucion', 'Entrega', 'Ref.'];
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
-  const fetchStats = useCallback(async () => {
+  const fetchStats = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) setRefreshing(true);
     try {
       const { data } = await api.get('/dashboard/stats');
       setStats(data.data);
+      setLastUpdated(new Date());
     } catch {
-      toast.error('Error al cargar estadísticas');
+      toast.error('Error al cargar estadisticas');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => { fetchStats(); }, [fetchStats]);
 
   useSocket({
-    'movement:new':        fetchStats,
-    'movement:unresolved': fetchStats,
-    'movement:resolved':   fetchStats,
-    'delivery:updated':    fetchStats,
-    'stats:updated':       fetchStats,
+    'movement:new':        () => fetchStats({ quiet: true }),
+    'movement:unresolved': () => fetchStats({ quiet: true }),
+    'movement:resolved':   () => fetchStats({ quiet: true }),
+    'movement:updated':    () => fetchStats({ quiet: true }),
+    'delivery:updated':    () => fetchStats({ quiet: true }),
+    'stats:updated':       () => fetchStats({ quiet: true }),
   });
 
-  const s = stats;
+  const s = stats || {};
+  const movements = s.movements || {};
+  const deliveries = s.deliveries || {};
+  const security   = s.security   || {};
+  const providers  = s.providers  || {};
 
-  // ── Groups ─────────────────────────────────────────────────────
-  const movimientosKpis = [
-    { label: 'Total Movimientos', value: s?.movements.total,           Icon: SwapHoriz,  colorKey: 'indigo' },
-    { label: 'Entradas',          value: s?.movements.inbound,         Icon: TrendingDown, colorKey: 'green' },
-    { label: 'Salidas',           value: s?.movements.outbound,        Icon: TrendingUp,  colorKey: 'amber' },
-    { label: 'ARS Recibido',      value: loading ? null : fmtARS(s?.movements.total_ars_received), Icon: AttachMoney, colorKey: 'cyan' },
-  ];
+  const deliveryTotal = n(deliveries.success) + n(deliveries.failed) + n(deliveries.pending) + n(deliveries.dead);
+  const successRate   = pct(deliveries.success, deliveryTotal);
+  const paidRate      = pct(movements.provider_paid, movements.total);
+  const riskCount     = n(movements.unresolved) + n(deliveries.failed) + n(deliveries.dead) + n(deliveries.ack_invalid);
 
-  const resolucionKpis = [
-    { label: 'Resueltos',        value: s?.movements.resolved,          Icon: TaskAlt,     colorKey: 'teal'   },
-    { label: 'No resueltos',     value: s?.movements.unresolved,        Icon: WarningAmber, colorKey: 'rose'   },
-    { label: 'Resuelto manual',  value: s?.movements.manually_resolved, Icon: BuildCircle,  colorKey: 'violet' },
-  ];
-
-  const destinoKpis = [
-    { label: 'Por dominio',         value: s?.movements.destination_domain_resolved, Icon: Source,      colorKey: 'cyan'   },
-    { label: 'Multi destino',       value: s?.movements.multi_destination,          Icon: SwapHoriz,   colorKey: 'indigo' },
-    { label: 'Dominios inválidos',  value: s?.security.invalid_destination_domains, Icon: WarningAmber,colorKey: 'amber'  },
-    { label: 'Deliveries multi',    value: s?.deliveries.multi_destination,         Icon: Send,        colorKey: 'green'  },
-    { label: 'Unresolved inválido', value: s?.movements.unresolved_invalid_domain,  Icon: GppMaybe,    colorKey: 'red'    },
-  ];
-
-  const proveedorKpis = [
-    { label: 'Pendiente', value: s?.movements.provider_pending,  Icon: HourglassEmpty, colorKey: 'amber' },
-    { label: 'Pagado',    value: s?.movements.provider_paid,     Icon: CheckCircle,    colorKey: 'green' },
-    { label: 'Rechazado', value: s?.movements.provider_rejected, Icon: CancelOutlined, colorKey: 'red'   },
-  ];
-
-  const entregasKpis = [
-    { label: 'Entregas OK',  value: s?.deliveries.success, Icon: CheckCircle,           colorKey: 'emerald' },
-    { label: 'Fallidas',     value: s?.deliveries.failed,  Icon: ReportProblemOutlined, colorKey: 'red'     },
-    { label: 'Pendientes',   value: s?.deliveries.pending, Icon: HourglassEmpty,        colorKey: 'orange'  },
-  ];
-
-  const seguridadKpis = [
-    { label: 'Proveedores activos', value: s?.providers.active,           Icon: Source,        colorKey: 'indigo' },
-    { label: 'Dead Letter (DLQ)',   value: s?.deliveries.dead,            Icon: Block,         colorKey: 'violet' },
-    { label: 'ACK válidos',         value: s?.deliveries.ack_valid,       Icon: MailOutlined,  colorKey: 'teal'   },
-    { label: 'ACK inválidos',       value: s?.deliveries.ack_invalid,     Icon: GppMaybe,      colorKey: 'rose'   },
-    { label: 'Rate limits',         value: s?.security.rate_limit_hits,   Icon: SpeedOutlined, colorKey: 'amber'  },
-    { label: 'Reactivadas',         value: s?.security.reactivated,       Icon: RotateRight,   colorKey: 'green'  },
-    { label: 'Errores webhook',     value: s?.security.webhook_errors,    Icon: ErrorOutlined, colorKey: 'red'    },
-  ];
+  const headline = useMemo(() => [
+    {
+      label: 'Volumen recibido',
+      value: fmtARS(movements.total_ars_received),
+      hint:  `${fmtNum(movements.inbound)} entradas · ${fmtNum(movements.total)} movimientos`,
+      Icon:  PaidOutlined, color: 'green',
+    },
+    {
+      label: 'Pagos confirmados',
+      value: fmtNum(movements.provider_paid),
+      hint:  `${paidRate}% del total informado por proveedor`,
+      Icon:  TaskAlt, color: 'blue',
+    },
+    {
+      label: 'Entrega saludable',
+      value: `${successRate}%`,
+      hint:  `${fmtNum(deliveries.success)} OK · ${fmtNum(deliveries.pending)} en cola`,
+      Icon:  SendOutlined,
+      color: successRate >= 90 ? 'green' : successRate >= 70 ? 'amber' : 'red',
+    },
+    {
+      label: 'Atencion requerida',
+      value: fmtNum(riskCount),
+      hint:  'No resueltos, fallas, DLQ o ACK invalidos',
+      Icon:  ReportProblemOutlined,
+      color: riskCount ? 'red' : 'green',
+    },
+  ], [deliveries, movements, paidRate, riskCount, successRate]);
 
   return (
-    <Box sx={{ minWidth: 0 }}>
+    <Box sx={{ width: '100%', minWidth: 0 }}>
 
-      {/* ── Page Header ── */}
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="h5">Dashboard</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
-          Resumen en tiempo real del gateway
-        </Typography>
-        <Box sx={{
-          height: '1px', mt: 1.5,
-          background: 'linear-gradient(90deg, rgba(99,102,241,0.55), rgba(139,92,246,0.25) 40%, transparent 75%)',
-        }} />
-      </Box>
-
-      {/* ── Movimientos ── */}
-      <SectionLabel label="Movimientos" accentColor="#6366f1" />
-      <Grid container spacing={{ xs: 1, sm: 1.5 }} sx={{ mb: 2.5 }}>
-        {movimientosKpis.map(k => (
-          <Grid key={k.label} item xs={6} sm={3}>
-            <StatCard {...k} loading={loading} accent />
-          </Grid>
-        ))}
-      </Grid>
-
-      {/* ── Resolución + Entregas (side by side on md+) ── */}
-      <Grid container spacing={{ xs: 2, md: 2.5 }} sx={{ mb: 2.5 }}>
-        <Grid item xs={12} md={5}>
-          <SectionLabel label="Resolución" accentColor="#8b5cf6" />
-          <Grid container spacing={{ xs: 1, sm: 1.5 }}>
-            {resolucionKpis.map(k => (
-              <Grid key={k.label} item xs={6} sm={4} md={4}>
-                <StatCard {...k} loading={loading} accent />
-              </Grid>
-            ))}
-          </Grid>
-        </Grid>
-        <Grid item xs={12} md={7}>
-          <SectionLabel label="Entregas" accentColor="#10b981" />
-          <Grid container spacing={{ xs: 1, sm: 1.5 }}>
-            {entregasKpis.map(k => (
-              <Grid key={k.label} item xs={6} sm={4}>
-                <StatCard {...k} loading={loading} accent />
-              </Grid>
-            ))}
-          </Grid>
-        </Grid>
-      </Grid>
-
-      <SectionLabel label="Destino" accentColor="#06b6d4" />
-      <Grid container spacing={{ xs: 1, sm: 1.5 }} sx={{ mb: 2.5 }}>
-        {destinoKpis.map(k => (
-          <Grid key={k.label} item xs={6} sm={4} md={3}>
-            <StatCard {...k} loading={loading} accent />
-          </Grid>
-        ))}
-      </Grid>
-
-      <SectionLabel label="Estado proveedor" accentColor="#14b8a6" />
-      <Grid container spacing={{ xs: 1, sm: 1.5 }} sx={{ mb: 2.5 }}>
-        {proveedorKpis.map(k => (
-          <Grid key={k.label} item xs={4} sm={4} md={3}>
-            <StatCard {...k} loading={loading} />
-          </Grid>
-        ))}
-      </Grid>
-
-      {/* ── Seguridad & Enterprise ── */}
-      <SectionLabel label="Seguridad & Enterprise" accentColor="#f59e0b" />
-      <Grid container spacing={{ xs: 1, sm: 1.5 }} sx={{ mb: 3 }}>
-        {seguridadKpis.map(k => (
-          <Grid key={k.label} item xs={6} sm={4} md={3} lg={3}>
-            <StatCard {...k} loading={loading} />
-          </Grid>
-        ))}
-      </Grid>
-
-      {/* ── Tables ── */}
-      <Grid container spacing={{ xs: 1.5, sm: 2 }}>
-        {/* Últimos movimientos */}
-        <Grid item xs={12} lg={7}>
-          <Card sx={{ height: '100%' }}>
-            <Box sx={{
-              px: { xs: 1.5, sm: 2 }, pt: { xs: 1.5, sm: 2 }, pb: 1,
-              display: 'flex',
-              flexDirection: { xs: 'column', sm: 'row' },
-              alignItems: { xs: 'flex-start', sm: 'center' },
-              justifyContent: 'space-between',
-              gap: 1,
-              borderBottom: '1px solid',
-              borderColor: 'divider',
-            }}>
-              <Typography variant="subtitle2" sx={{ letterSpacing: '-0.01em' }}>
-                Últimos Movimientos
-              </Typography>
+      {/* ── Header ── */}
+      <Box sx={{
+        mb: 2.5, px: { xs: 1.75, sm: 2.25 }, py: { xs: 1.75, sm: 2 },
+        borderRadius: 2, border: '1px solid', borderColor: 'divider',
+        bgcolor: 'background.paper', position: 'relative', overflow: 'hidden',
+        '&::before': {
+          content: '""', position: 'absolute', inset: 0, pointerEvents: 'none',
+          background: `linear-gradient(135deg, ${tone.blue.dim} 0%, transparent 55%)`,
+        },
+      }}>
+        <Stack
+          direction={{ xs: 'column', md: 'row' }}
+          alignItems={{ xs: 'flex-start', md: 'center' }}
+          justifyContent="space-between"
+          spacing={1.5}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 0.65 }}>
               <Box sx={{
-                display: 'flex', alignItems: 'center', gap: 0.75,
-                bgcolor: 'rgba(16,185,129,0.08)',
-                border: '1px solid rgba(16,185,129,0.2)',
-                borderRadius: '20px', px: 1.25, py: 0.4,
+                width: 34, height: 34, borderRadius: 1.75, flexShrink: 0,
+                background: `linear-gradient(135deg, ${tone.blue.soft}, ${tone.violet.soft})`,
+                border: `1px solid ${tone.blue.line}`, color: tone.blue.main,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <Box sx={{
-                  width: 6, height: 6, borderRadius: '50%', bgcolor: '#10b981',
-                  boxShadow: '0 0 6px rgba(16,185,129,0.9)',
-                  animation: 'livePulse 2s ease-in-out infinite',
-                  '@keyframes livePulse': {
-                    '0%,100%': { opacity: 1, transform: 'scale(1)' },
-                    '50%': { opacity: 0.4, transform: 'scale(0.75)' },
-                  },
-                }} />
-                <Typography sx={{ fontSize: '0.67rem', fontWeight: 700, color: '#10b981', letterSpacing: '0.03em' }}>
-                  En vivo
-                </Typography>
+                <HubOutlined sx={{ fontSize: 19 }} />
               </Box>
+              <Typography variant="h5" sx={{ fontWeight: 900, lineHeight: 1, letterSpacing: '-0.01em' }}>
+                Operacion FlowHG
+              </Typography>
+            </Stack>
+            <Typography sx={{ color: 'text.secondary', fontSize: '0.81rem', maxWidth: 720, lineHeight: 1.5 }}>
+              Estado del gateway · resolucion de cuentas HG Cash · entregas a dominios · actualizaciones de pago
+            </Typography>
+          </Box>
+
+          <Stack direction="row" spacing={0.85} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Box sx={{
+              display: 'inline-flex', alignItems: 'center', gap: 0.75,
+              px: 1.1, py: 0.6, borderRadius: 99,
+              bgcolor: tone.green.soft, border: `1px solid ${tone.green.line}`, color: tone.green.main,
+            }}>
+              <Box sx={{
+                width: 6, height: 6, borderRadius: '50%', bgcolor: 'currentColor',
+                '@keyframes livepulse': {
+                  '0%, 100%': { opacity: 1 },
+                  '50%': { opacity: 0.3 },
+                },
+                animation: 'livepulse 2s ease-in-out infinite',
+              }} />
+              <Typography sx={{ fontSize: '0.7rem', fontWeight: 800 }}>En vivo</Typography>
             </Box>
 
-            <TableContainer sx={{ overflowX: 'auto' }}>
-              <Table size="small" sx={{ minWidth: 520 }}>
+            {lastUpdated && (
+              <Tooltip title="Ultima actualizacion">
+                <Box sx={{
+                  display: 'inline-flex', alignItems: 'center', gap: 0.65,
+                  px: 1.1, py: 0.6, borderRadius: 99,
+                  border: '1px solid', borderColor: 'divider', cursor: 'default',
+                }}>
+                  <AccessTime sx={{ fontSize: 13, color: 'text.secondary' }} />
+                  <Typography sx={{ fontSize: '0.7rem', color: 'text.secondary', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                    {lastUpdated.toLocaleTimeString('es-AR', { timeStyle: 'short' })}
+                  </Typography>
+                </Box>
+              </Tooltip>
+            )}
+
+            <Button
+              size="small" variant="outlined"
+              startIcon={<Refresh sx={{ fontSize: '15px !important' }} />}
+              disabled={refreshing}
+              onClick={() => fetchStats()}
+              sx={{ fontSize: '0.74rem', px: 1.5, py: 0.55 }}
+            >
+              Actualizar
+            </Button>
+          </Stack>
+        </Stack>
+      </Box>
+
+      {/* ── KPI Cards ── */}
+      <Grid container spacing={1.5} sx={{ mb: 2 }}>
+        {headline.map(item => (
+          <Grid item xs={12} sm={6} lg={3} key={item.label}>
+            <MetricCard {...item} loading={loading} />
+          </Grid>
+        ))}
+      </Grid>
+
+      {/* ── Pipeline · Payment · Risk ── */}
+      <Grid container spacing={2} sx={{ mb: 2 }}>
+
+        <Grid item xs={12} lg={5}>
+          <Panel
+            title="Salud del pipeline"
+            subtitle="Resolucion, entrega y ACK del flujo completo"
+            action={<ShieldOutlined sx={{ fontSize: 17, color: tone.blue.main }} />}
+          >
+            <ProgressRow
+              label="Movimientos resueltos"
+              value={n(movements.resolved) + n(movements.manually_resolved) + n(movements.multi_destination)}
+              total={movements.total} color="blue" loading={loading}
+            />
+            <ProgressRow label="Entregas exitosas" value={deliveries.success} total={deliveryTotal} color="green" loading={loading} />
+            <ProgressRow
+              label="Updates entregados"
+              value={deliveries.updates_delivered}
+              total={Math.max(n(deliveries.update_success), n(deliveries.updates_delivered), 1)}
+              color="cyan" trailing={`${fmtNum(deliveries.updates_delivered)} entregados`} loading={loading}
+            />
+            <ProgressRow
+              label="ACK validos"
+              value={deliveries.ack_valid}
+              total={n(deliveries.ack_valid) + n(deliveries.ack_invalid)}
+              color="violet" loading={loading}
+            />
+            <Grid container spacing={0.85} sx={{ mt: 1.75 }}>
+              <Grid item xs={6}><StatBlock label="Inicial OK"   value={deliveries.initial_success} color="green"  loading={loading} /></Grid>
+              <Grid item xs={6}><StatBlock label="Update OK"    value={deliveries.update_success}  color="cyan"   loading={loading} /></Grid>
+              <Grid item xs={6}><StatBlock label="DLQ"          value={deliveries.dead}            color="red"    loading={loading} /></Grid>
+              <Grid item xs={6}><StatBlock label="ACK invalido" value={deliveries.ack_invalid}     color="amber"  loading={loading} /></Grid>
+            </Grid>
+          </Panel>
+        </Grid>
+
+        <Grid item xs={12} lg={4}>
+          <Panel
+            title="Estados de pago"
+            subtitle="Resultado comercial informado por el proveedor"
+            action={<TrendingUp sx={{ fontSize: 17, color: tone.green.main }} />}
+          >
+            <ProgressRow label="Pagados"    value={movements.provider_paid}     total={movements.total} color="green" loading={loading} />
+            <ProgressRow label="Pendientes" value={movements.provider_pending}  total={movements.total} color="amber" loading={loading} />
+            <ProgressRow label="Rechazados" value={movements.provider_rejected} total={movements.total} color="red"   loading={loading} />
+            <Grid container spacing={0.85} sx={{ mt: 1.75 }}>
+              <Grid item xs={4}><StatBlock label="Entrada" value={movements.inbound}           color="blue"   loading={loading} /></Grid>
+              <Grid item xs={4}><StatBlock label="Salida"  value={movements.outbound}          color="violet" loading={loading} /></Grid>
+              <Grid item xs={4}><StatBlock label="Multi"   value={movements.multi_destination} color="cyan"   loading={loading} /></Grid>
+            </Grid>
+          </Panel>
+        </Grid>
+
+        <Grid item xs={12} lg={3}>
+          <Panel
+            title="Riesgo y seguridad"
+            subtitle="Eventos que requieren atencion"
+            action={<GppMaybe sx={{ fontSize: 17, color: riskCount ? tone.red.main : tone.green.main }} />}
+          >
+            <Grid container spacing={0.85}>
+              <Grid item xs={6} lg={12}><StatBlock label="No resueltos"     value={movements.unresolved}        color="red"   loading={loading} /></Grid>
+              <Grid item xs={6} lg={12}><StatBlock label="Rate limits"      value={security.rate_limit_hits}    color="amber" loading={loading} /></Grid>
+              <Grid item xs={6} lg={12}><StatBlock label="Errores webhook"  value={security.webhook_errors}     color="red"   loading={loading} /></Grid>
+              <Grid item xs={6} lg={12}><StatBlock label="Proveedores activos" value={providers.active}         color="blue"  loading={loading} /></Grid>
+            </Grid>
+          </Panel>
+        </Grid>
+
+      </Grid>
+
+      {/* ── Movements Table · Incidents ── */}
+      <Grid container spacing={2} sx={{ mb: 2 }}>
+
+        <Grid item xs={12} xl={8}>
+          <Panel
+            title="Ultimos movimientos"
+            subtitle="Pagos recibidos y estado de entrega al dominio"
+            action={<SwapHoriz sx={{ fontSize: 17, color: tone.violet.main }} />}
+            noPad
+          >
+            <TableContainer sx={{ overflowX: 'auto', maxHeight: 420 }}>
+              <Table size="small" stickyHeader sx={{ minWidth: 720 }}>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Fecha</TableCell>
-                    <TableCell>Dominio</TableCell>
-                    <TableCell>Monto</TableCell>
-                    <TableCell>Dir.</TableCell>
-                    <TableCell>HG</TableCell>
-                    <TableCell>Estado proveedor</TableCell>
-                    <TableCell>Resolución</TableCell>
-                    <TableCell>Entrega</TableCell>
+                    {TABLE_COLS.map(h => (
+                      <TableCell key={h} sx={{
+                        fontSize: '0.65rem', fontWeight: 800,
+                        textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap',
+                      }}>
+                        {h}
+                      </TableCell>
+                    ))}
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {loading ? (
                     [...Array(6)].map((_, i) => (
                       <TableRow key={i}>
-                        {[...Array(8)].map((_, j) => (
-                          <TableCell key={j}><Skeleton sx={{ transform: 'none' }} /></TableCell>
+                        {[...Array(7)].map((__, j) => (
+                          <TableCell key={j}><Skeleton height={13} sx={{ transform: 'none' }} /></TableCell>
                         ))}
                       </TableRow>
                     ))
-                  ) : !s?.recent_movements?.length ? (
+                  ) : !s.recent_movements?.length ? (
                     <TableRow>
-                      <TableCell colSpan={8}>
-                        <Box sx={{ py: 5, textAlign: 'center' }}>
-                          <Box sx={{
-                            width: 44, height: 44, borderRadius: '12px',
-                            background: 'linear-gradient(135deg, rgba(99,102,241,0.14), rgba(139,92,246,0.08))',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            mx: 'auto', mb: 1.5,
-                          }}>
-                            <SwapHoriz sx={{ fontSize: 22, color: 'primary.light', opacity: 0.7 }} />
-                          </Box>
-                          <Typography variant="body2" fontWeight={600} color="text.secondary">
-                            Sin movimientos aún
-                          </Typography>
-                        </Box>
+                      <TableCell colSpan={7} sx={{ border: 'none', p: 0 }}>
+                        <EmptyState icon={CheckCircle} title="Sin movimientos todavia" text="Cuando llegue el primer webhook, va a aparecer aca." />
                       </TableCell>
                     </TableRow>
-                  ) : s.recent_movements.map((m) => (
-                    <TableRow key={m.id} hover
-                      sx={m.resolution_status === 'unresolved' ? { bgcolor: 'rgba(239,68,68,0.04)' } : {}}>
-                      <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary', fontSize: '0.75rem' }}>
+                  ) : s.recent_movements.map((m, idx) => (
+                    <TableRow
+                      key={m.id}
+                      hover
+                      sx={{ bgcolor: idx % 2 === 0 ? 'transparent' : 'action.hover' }}
+                    >
+                      <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary', fontSize: '0.71rem', fontVariantNumeric: 'tabular-nums' }}>
                         {fmtDate(m.received_at)}
                       </TableCell>
-                      <TableCell sx={{ fontWeight: 500 }}>{m.domain_name || '—'}</TableCell>
-                      <TableCell sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtARS(m.amount)}</TableCell>
-                      <TableCell><StatusChip status={m.direction} /></TableCell>
-                      <TableCell><StatusChip status={m.status} /></TableCell>
-                      <TableCell><ProviderStatusChip status={m.provider_status} /></TableCell>
+                      <TableCell>
+                        <Typography sx={{ fontWeight: 700, fontSize: '0.78rem', lineHeight: 1.2 }}>
+                          {m.domain_name || '-'}
+                        </Typography>
+                        <Typography sx={{ color: 'text.secondary', fontSize: '0.64rem', fontFamily: 'monospace', lineHeight: 1.2, mt: 0.2 }}>
+                          {m.domain_hostname || m.destination_domain_raw || ''}
+                        </Typography>
+                      </TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                        <Typography sx={{ fontWeight: 900, fontSize: '0.8rem', color: tone.green.main, fontVariantNumeric: 'tabular-nums' }}>
+                          {fmtARS(m.amount)}
+                        </Typography>
+                      </TableCell>
+                      <TableCell><ProviderChip status={m.provider_status} /></TableCell>
                       <TableCell><StatusChip status={m.resolution_status} /></TableCell>
                       <TableCell>
                         <StatusChip status={m.delivery_status || (m.resolution_status === 'unresolved' ? 'unresolved' : 'pending')} />
+                      </TableCell>
+                      <TableCell sx={{ fontFamily: 'monospace', color: 'text.secondary', fontSize: '0.68rem', fontVariantNumeric: 'tabular-nums' }}>
+                        {m.coelsa_code || m.hg_id || '-'}
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </TableContainer>
-          </Card>
+          </Panel>
         </Grid>
 
-        {/* Entregas fallidas */}
-        <Grid item xs={12} lg={5}>
-          <Card sx={{ height: '100%' }}>
-            <Box sx={{
-              px: { xs: 1.5, sm: 2 }, pt: { xs: 1.5, sm: 2 }, pb: 1,
-              borderBottom: '1px solid',
-              borderColor: 'divider',
-            }}>
-              <Typography variant="subtitle2" sx={{ letterSpacing: '-0.01em' }}>
-                Entregas Fallidas Recientes
-              </Typography>
-            </Box>
-            <Box sx={{ px: { xs: 1.25, sm: 1.5 }, pb: { xs: 1.25, sm: 1.5 }, pt: 1.25 }}>
-              {loading ? (
-                [...Array(3)].map((_, i) => (
-                  <Skeleton key={i} height={68} sx={{ borderRadius: '10px', mb: 1, transform: 'none' }} />
-                ))
-              ) : !s?.recent_failed_deliveries?.length ? (
-                <Box sx={{ py: 5, textAlign: 'center' }}>
-                  <Box sx={{
-                    width: 44, height: 44, borderRadius: '12px',
-                    background: 'linear-gradient(135deg, rgba(16,185,129,0.14), rgba(16,185,129,0.06))',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    mx: 'auto', mb: 1.5,
-                    boxShadow: '0 4px 14px rgba(16,185,129,0.12)',
+        <Grid item xs={12} xl={4}>
+          <Panel
+            title="Incidentes de entrega"
+            subtitle="Fallos recientes, DLQ y errores de destino"
+            action={<ErrorOutlined sx={{ fontSize: 17, color: tone.red.main }} />}
+          >
+            {loading ? (
+              [...Array(3)].map((_, i) => (
+                <Skeleton key={i} height={90} sx={{ borderRadius: 1.5, mb: 1, transform: 'none' }} />
+              ))
+            ) : !s.recent_failed_deliveries?.length ? (
+              <EmptyState icon={CheckCircle} title="Sin fallas recientes" text="Las entregas estan respondiendo correctamente." />
+            ) : (
+              <Stack spacing={1}>
+                {s.recent_failed_deliveries.map((d) => (
+                  <Box key={d.id} sx={{
+                    p: 1.3, borderRadius: 1.5,
+                    border: '1px solid', borderColor: 'divider',
+                    borderLeft: `3px solid ${tone.red.main}`,
+                    bgcolor: tone.red.dim,
+                    transition: 'background-color 0.15s',
+                    '&:hover': { bgcolor: tone.red.soft },
                   }}>
-                    <CheckCircle sx={{ color: '#10b981', fontSize: 22 }} />
-                  </Box>
-                  <Typography variant="body2" fontWeight={600} color="text.secondary">
-                    Sin entregas fallidas
-                  </Typography>
-                  <Typography variant="caption" color="text.disabled">
-                    Todo entregado correctamente
-                  </Typography>
-                </Box>
-              ) : s.recent_failed_deliveries.map((d) => (
-                <Box key={d.id} sx={{
-                  p: 1.5, borderRadius: '10px',
-                  border: '1px solid rgba(239,68,68,0.15)',
-                  bgcolor: 'rgba(239,68,68,0.04)',
-                  mb: 1,
-                  transition: 'border-color 0.15s',
-                  '&:hover': { borderColor: 'rgba(239,68,68,0.28)' },
-                }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 0.5, gap: 1 }}>
-                    <Typography variant="caption" fontWeight={700} color="error.main" noWrap>
-                      {d.domain_name}
+                    <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="flex-start" sx={{ mb: 0.65 }}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ fontWeight: 800, fontSize: '0.8rem', lineHeight: 1.2 }} noWrap>
+                          {d.domain_name || '-'}
+                        </Typography>
+                        <Typography sx={{ color: 'text.secondary', fontSize: '0.65rem', mt: 0.2, lineHeight: 1.2 }}>
+                          {d.delivery_kind === 'update' ? 'Update' : 'Alta'} · {fmtDate(d.updated_at)}
+                        </Typography>
+                      </Box>
+                      <StatusChip status={d.status} />
+                    </Stack>
+                    <Typography sx={{ color: 'text.secondary', fontSize: '0.69rem', lineHeight: 1.5, mb: 0.9 }}>
+                      {d.last_error?.substring(0, 135) || 'Error sin detalle'}
                     </Typography>
-                    <Typography variant="caption" fontWeight={700} color="text.primary" noWrap>
-                      {fmtARS(d.amount)}
-                    </Typography>
+                    <Stack direction="row" spacing={0.6} alignItems="center" flexWrap="wrap" useFlexGap>
+                      <Box sx={{ px: 0.75, py: 0.2, borderRadius: 0.75, bgcolor: tone.slate.soft }}>
+                        <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'text.secondary', fontVariantNumeric: 'tabular-nums' }}>
+                          {fmtNum(d.attempts)} intentos
+                        </Typography>
+                      </Box>
+                      {d.last_http_status && (
+                        <Box sx={{ px: 0.75, py: 0.2, borderRadius: 0.75, bgcolor: tone.amber.soft, color: tone.amber.main }}>
+                          <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
+                            HTTP {d.last_http_status}
+                          </Typography>
+                        </Box>
+                      )}
+                      {d.provider_status && <ProviderChip status={d.provider_status} />}
+                    </Stack>
                   </Box>
-                  <Typography variant="caption" color="text.secondary"
-                    sx={{ display: 'block', mb: 0.5, fontSize: '0.7rem', lineHeight: 1.4 }}>
-                    {d.last_error?.substring(0, 90) || 'Error desconocido'}
-                  </Typography>
-                  <Box sx={{ display: 'flex', gap: 1 }}>
-                    <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.67rem' }}>
-                      {d.attempts} intentos
-                    </Typography>
-                    {d.last_http_status && (
-                      <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.67rem' }}>
-                        · HTTP {d.last_http_status}
-                      </Typography>
-                    )}
-                  </Box>
-                </Box>
-              ))}
-            </Box>
-          </Card>
+                ))}
+              </Stack>
+            )}
+          </Panel>
         </Grid>
+
+      </Grid>
+
+      {/* ── Resolution · Delivery Performance ── */}
+      <Grid container spacing={2}>
+
+        <Grid item xs={12} md={6}>
+          <Panel
+            title="Resolucion de destino"
+            subtitle="Como se estan asignando las cuentas y dominios"
+            action={<AccountTreeOutlined sx={{ fontSize: 17, color: tone.cyan.main }} />}
+          >
+            <Grid container spacing={0.85}>
+              <Grid item xs={6}><StatBlock label="Por dominio" value={movements.destination_domain_resolved}          color="cyan"   loading={loading} /></Grid>
+              <Grid item xs={6}><StatBlock label="Manual"      value={movements.manually_resolved}                    color="violet" loading={loading} /></Grid>
+              <Grid item xs={6}><StatBlock label="Invalidos"   value={security.invalid_destination_domains}           color="amber"  loading={loading} /></Grid>
+              <Grid item xs={6}><StatBlock label="Parciales"   value={security.destination_domains_partial_match}     color="blue"   loading={loading} /></Grid>
+            </Grid>
+          </Panel>
+        </Grid>
+
+        <Grid item xs={12} md={6}>
+          <Panel
+            title="Rendimiento de entregas"
+            subtitle="Volumen de entregas y actualizaciones confirmadas"
+            action={<SpeedOutlined sx={{ fontSize: 17, color: tone.green.main }} />}
+          >
+            <Grid container spacing={0.85}>
+              <Grid item xs={6}><StatBlock label="Entregas OK"   value={deliveries.success}          color="green"  loading={loading} /></Grid>
+              <Grid item xs={6}><StatBlock label="Pendientes"    value={deliveries.pending}           color="amber"  loading={loading} /></Grid>
+              <Grid item xs={6}><StatBlock label="Updates OK"    value={deliveries.update_success}   color="cyan"   loading={loading} /></Grid>
+              <Grid item xs={6}><StatBlock label="Multi destino" value={deliveries.multi_destination} color="violet" loading={loading} /></Grid>
+            </Grid>
+          </Panel>
+        </Grid>
+
       </Grid>
     </Box>
   );

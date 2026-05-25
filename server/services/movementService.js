@@ -313,14 +313,20 @@ async function updateMovement(movementPayload, resolveResult, meta = {}) {
   return { duplicate: false, id: movementId, updated: true };
 }
 
-async function createDelivery(movementId, domainId, destinationUrl, providerStatus = null) {
+async function createDelivery(movementId, domainId, destinationUrl, providerStatus = null, deliveryKind = 'initial') {
   const hasProviderStatus = await hasColumn('webhook_deliveries', 'provider_status');
+  const hasDeliveryKind = await hasColumn('webhook_deliveries', 'delivery_kind');
   const columns = ['movement_id', 'domain_id', 'destination_url', 'status', 'attempts'];
   const values = [movementId, domainId, destinationUrl, 'pending', 0];
 
   if (hasProviderStatus) {
     columns.splice(3, 0, 'provider_status');
     values.splice(3, 0, normalizeProviderStatus(providerStatus));
+  }
+  if (hasDeliveryKind) {
+    const insertAt = hasProviderStatus ? 4 : 3;
+    columns.splice(insertAt, 0, 'delivery_kind');
+    values.splice(insertAt, 0, deliveryKind || 'initial');
   }
 
   const [result] = await pool.query(
@@ -337,7 +343,7 @@ async function createDelivery(movementId, domainId, destinationUrl, providerStat
   return { created: true, insertId: result.insertId };
 }
 
-async function syncDeliveriesForMovement(movementId, domains = [], providerStatus = null) {
+async function syncDeliveriesForMovement(movementId, domains = [], providerStatus = null, deliveryKind = 'initial') {
   const uniqueDomains = [];
   const seen = new Set();
 
@@ -353,7 +359,7 @@ async function syncDeliveriesForMovement(movementId, domains = [], providerStatu
   const skipped = [];
 
   for (const domain of uniqueDomains) {
-    const result = await createDelivery(movementId, domain.id, domain.destination_webhook_url, providerStatus);
+    const result = await createDelivery(movementId, domain.id, domain.destination_webhook_url, providerStatus, deliveryKind);
     if (result.created) {
       created.push({ domainId: domain.id, deliveryId: result.insertId });
     } else {

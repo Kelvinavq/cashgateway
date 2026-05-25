@@ -247,7 +247,7 @@ app.post('/webhooks/hgcash', express.raw({ type: '*/*' }), (req, res) => {
               <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: '#10b981', mt: 0.75, flexShrink: 0 }} />
               <Typography sx={{ fontSize: '0.76rem', color: 'text.secondary', lineHeight: 1.5 }}>
                 <strong style={{ color: '#10b981' }}>Destination Token</strong> — lo definís vos. El gateway lo manda en
-                <code style={{ color: '#818cf8' }}> x-gateway-token</code> para que tu app autentique al gateway.
+                <code style={{ color: '#818cf8' }}> x-gateway-token</code> para que tu app autentique al gateway. Si lo dejás vacío, se genera automáticamente.
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
@@ -339,8 +339,12 @@ export default function Domains() {
       const payload = { ...rest, is_active: form.is_active ? 1 : 0, require_ack: form.require_ack ? 1 : 0 };
       if (dialog === 'create') {
         const { data } = await api.post('/domains', payload);
-        if (data.data?.gateway_signing_secret) {
-          setSecretAlert({ domainName: form.name, secret: data.data.gateway_signing_secret });
+        if (data.data?.gateway_signing_secret || data.data?.destination_token) {
+          setSecretAlert({
+            domainName: form.name,
+            signingSecret: data.data.gateway_signing_secret,
+            destinationToken: data.data.destination_token,
+          });
         }
         toast.success('Dominio creado');
       } else {
@@ -359,7 +363,7 @@ export default function Domains() {
   const handleRegenerateSecret = async (id, name) => {
     try {
       const { data } = await api.post(`/domains/${id}/regenerate-signing-secret`);
-      setSecretAlert({ domainName: name, secret: data.gateway_signing_secret });
+      setSecretAlert({ domainName: name, signingSecret: data.gateway_signing_secret });
       toast.success('Firma regenerada');
       setDialog(null);
       fetch();
@@ -423,7 +427,7 @@ export default function Domains() {
         }} />
       </Box>
 
-      {/* HMAC secret alert — with usage instructions */}
+      {/* Gateway credentials alert — with usage instructions */}
       {secretAlert && (
         <Alert
           severity="warning"
@@ -431,28 +435,49 @@ export default function Domains() {
           onClose={() => setSecretAlert(null)}
         >
           <Typography sx={{ fontSize: '0.84rem', fontWeight: 700, mb: 0.75 }}>
-            Secreto HMAC generado para &quot;{secretAlert.domainName}&quot; — solo visible ahora
+            Credenciales generadas para &quot;{secretAlert.domainName}&quot; — copialas ahora
           </Typography>
-          <Box sx={{
-            display: 'flex', alignItems: 'center', gap: 1,
-            bgcolor: 'rgba(0,0,0,0.25)', borderRadius: '6px', px: 1.25, py: 0.75, mb: 1.25,
-          }}>
-            <Typography sx={{ fontFamily: 'monospace', fontSize: '0.8rem', wordBreak: 'break-all', flex: 1, color: '#fde68a' }}>
-              {secretAlert.secret}
-            </Typography>
-            <IconButton size="small" onClick={() => copy(secretAlert.secret)} sx={{ flexShrink: 0 }}>
-              <ContentCopy sx={{ fontSize: 14 }} />
-            </IconButton>
-          </Box>
+          {secretAlert.destinationToken && (
+            <Box sx={{
+              display: 'flex', alignItems: 'center', gap: 1,
+              bgcolor: 'rgba(0,0,0,0.25)', borderRadius: '6px', px: 1.25, py: 0.75, mb: 1,
+            }}>
+              <Typography sx={{ fontSize: '0.72rem', color: '#86efac', fontWeight: 700, width: 150, flexShrink: 0 }}>
+                Destination Token
+              </Typography>
+              <Typography sx={{ fontFamily: 'monospace', fontSize: '0.8rem', wordBreak: 'break-all', flex: 1, color: '#bbf7d0' }}>
+                {secretAlert.destinationToken}
+              </Typography>
+              <IconButton size="small" onClick={() => copy(secretAlert.destinationToken)} sx={{ flexShrink: 0 }}>
+                <ContentCopy sx={{ fontSize: 14 }} />
+              </IconButton>
+            </Box>
+          )}
+          {secretAlert.signingSecret && (
+            <Box sx={{
+              display: 'flex', alignItems: 'center', gap: 1,
+              bgcolor: 'rgba(0,0,0,0.25)', borderRadius: '6px', px: 1.25, py: 0.75, mb: 1.25,
+            }}>
+              <Typography sx={{ fontSize: '0.72rem', color: '#fde68a', fontWeight: 700, width: 150, flexShrink: 0 }}>
+                HMAC Secret
+              </Typography>
+              <Typography sx={{ fontFamily: 'monospace', fontSize: '0.8rem', wordBreak: 'break-all', flex: 1, color: '#fde68a' }}>
+                {secretAlert.signingSecret}
+              </Typography>
+              <IconButton size="small" onClick={() => copy(secretAlert.signingSecret)} sx={{ flexShrink: 0 }}>
+                <ContentCopy sx={{ fontSize: 14 }} />
+              </IconButton>
+            </Box>
+          )}
           <Box sx={{
             p: 1.25, borderRadius: '6px',
             bgcolor: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
           }}>
             <Typography sx={{ fontSize: '0.73rem', fontWeight: 700, color: '#fbbf24', mb: 0.5 }}>
-              Cómo usarlo en tu app — verificar la firma HMAC:
+              En Betchat, guardá estos valores en la cuenta HG Cash FlowHG:
             </Typography>
             <Typography component="pre" sx={{ fontSize: '0.7rem', color: '#fde68a', fontFamily: 'monospace', lineHeight: 1.6, m: 0, whiteSpace: 'pre-wrap' }}>
-              {`const sig = crypto.createHmac('sha256', '${secretAlert.secret.substring(0, 20)}…')\n  .update(\`\${timestamp}.\${rawBody}\`).digest('hex');\n// Comparar con header x-gateway-signature: sha256={sig}`}
+              {`webhook_secret = destination_token\ngateway_signing_secret = hmac_secret`}
             </Typography>
           </Box>
         </Alert>
@@ -674,7 +699,7 @@ export default function Domains() {
                   <span>
                     Lo definís vos. El gateway lo envía en el header{' '}
                     <code style={{ color: '#818cf8' }}>x-gateway-token</code>{' '}
-                    para que tu app verifique que la llamada viene del gateway.
+                    para que tu app verifique que la llamada viene del gateway. Si lo dejás vacío, se genera automáticamente.
                   </span>
                 }
                 InputProps={{

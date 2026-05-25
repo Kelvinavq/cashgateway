@@ -5,6 +5,7 @@ const { pool } = require('../config/database');
 const { connectRedis } = require('../config/redis');
 const { forwardWebhook } = require('../services/webhookForwardService');
 const { invalidateStatsCache } = require('../services/statsService');
+const { hasColumn } = require('../services/schemaService');
 const socketService = require('../services/socketService');
 const logService = require('../services/logService');
 const logger = require('../utils/logger');
@@ -16,7 +17,7 @@ const MAX_ATTEMPTS = 5;
 const worker = new Worker(
   'webhook-forward',
   async (job) => {
-    const { deliveryId, movementId } = job.data;
+    const { deliveryId, movementId, deliveryKind: jobDeliveryKind } = job.data;
     const attemptNumber = job.attemptsMade + 1;
     logger.info(`Processing delivery id=${deliveryId}, attempt=${attemptNumber}`);
 
@@ -28,6 +29,7 @@ const worker = new Worker(
     const [deliveries] = await pool.query('SELECT * FROM webhook_deliveries WHERE id = ?', [deliveryId]);
     const delivery = deliveries[0];
     if (!delivery) throw new Error(`Delivery ${deliveryId} not found`);
+    const deliveryKind = jobDeliveryKind || delivery.delivery_kind || 'initial';
 
     const [movements] = await pool.query('SELECT * FROM movements WHERE id = ?', [movementId]);
     const movement = movements[0];
@@ -43,6 +45,9 @@ const worker = new Worker(
     let ackValid = 0;
     let ackPayload = null;
     let error = null;
+    const hasDeliveryKind = await hasColumn('webhook_deliveries', 'delivery_kind');
+    const hasInitialDeliveredAt = await hasColumn('webhook_deliveries', 'initial_delivered_at');
+    const hasLastUpdateDeliveredAt = await hasColumn('webhook_deliveries', 'last_update_delivered_at');
 
     try {
       const result = await forwardWebhook(delivery, movement, domain);
@@ -55,27 +60,51 @@ const worker = new Worker(
         : JSON.stringify(result.response.data).substring(0, 1000);
 
       if (result.response.status >= 200 && result.response.status < 300) {
+        const successSetParts = [
+          "status='success'",
+          'last_http_status=?',
+          'last_response_body=?',
+          'ack_received=?',
+          'ack_valid=?',
+          'ack_payload=?',
+          'delivered_at=NOW()',
+          'updated_at=NOW()',
+        ];
+        const successParams = [
+          httpStatus,
+          responseBody,
+          ackReceived,
+          ackValid,
+          ackPayload ? JSON.stringify(ackPayload) : null,
+        ];
+        if (hasDeliveryKind) {
+          successSetParts.push('delivery_kind=?');
+          successParams.push(deliveryKind);
+        }
+        if (deliveryKind === 'update' && hasLastUpdateDeliveredAt) {
+          successSetParts.push('last_update_delivered_at=NOW()');
+        }
+        if (deliveryKind !== 'update' && hasInitialDeliveredAt) {
+          successSetParts.push('initial_delivered_at=COALESCE(initial_delivered_at, NOW())');
+        }
+        successParams.push(deliveryId);
         await pool.query(
-          `UPDATE webhook_deliveries
-           SET status='success', last_http_status=?, last_response_body=?,
-               ack_received=?, ack_valid=?, ack_payload=?,
-               delivered_at=NOW(), updated_at=NOW()
-           WHERE id=?`,
-          [httpStatus, responseBody, ackReceived, ackValid, ackPayload ? JSON.stringify(ackPayload) : null, deliveryId]
+          `UPDATE webhook_deliveries SET ${successSetParts.join(', ')} WHERE id=?`,
+          successParams
         );
         await pool.query(
           'UPDATE movements SET forwarded_to_domain_at=NOW(), updated_at=NOW() WHERE id=?',
           [movementId]
         );
-        logger.info(`Delivery ${deliveryId} succeeded with HTTP ${httpStatus}`);
+        logger.info(`Delivery ${deliveryId} (${deliveryKind}) succeeded with HTTP ${httpStatus}`);
         logService.info({
           source: 'webhookWorker',
-          event_type: 'delivery_success',
+          event_type: deliveryKind === 'update' ? 'delivery_update_success' : 'delivery_success',
           gateway_event_id: movement.gateway_event_id,
           movement_id: movementId,
           delivery_id: deliveryId,
-          message: `Delivery succeeded HTTP ${httpStatus}`,
-          metadata: { httpStatus, ackValid, provider_status: movement.provider_status || null },
+          message: `Delivery ${deliveryKind} succeeded HTTP ${httpStatus}`,
+          metadata: { httpStatus, ackValid, delivery_kind: deliveryKind, provider_status: movement.provider_status || null },
         });
       } else {
         error = `HTTP ${result.response.status}: ${responseBody}`;
@@ -115,7 +144,9 @@ const worker = new Worker(
 
       const logEntry = {
         source: 'webhookWorker',
-        event_type: isFinal ? 'delivery_dead' : 'delivery_retry',
+        event_type: isFinal
+          ? (deliveryKind === 'update' ? 'delivery_update_dead' : 'delivery_dead')
+          : (deliveryKind === 'update' ? 'delivery_update_retry' : 'delivery_retry'),
         gateway_event_id: movement.gateway_event_id,
         movement_id: movementId,
         delivery_id: deliveryId,
@@ -127,6 +158,7 @@ const worker = new Worker(
           attempts: attemptNumber,
           isFinal,
           isAckError: err.isAckError || false,
+          delivery_kind: deliveryKind,
           provider_status: movement.provider_status || null,
         },
       };
@@ -136,7 +168,7 @@ const worker = new Worker(
       return; // DLQ — don't rethrow, job is considered "complete" (dead)
     }
 
-    socketService.emit('delivery:updated', { deliveryId, status: 'success', httpStatus, ackValid, provider_status: movement.provider_status || null });
+    socketService.emit('delivery:updated', { deliveryId, status: 'success', httpStatus, ackValid, delivery_kind: deliveryKind, provider_status: movement.provider_status || null });
     await invalidateStatsCache();
   },
   { connection, attempts: MAX_ATTEMPTS, backoff: { type: 'exponential', delay: 5000 } }

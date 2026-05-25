@@ -267,7 +267,7 @@ export default function Layout({ children }) {
   );
 
   return (
-    <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+    <Box sx={{ display: 'flex', minHeight: '100vh', width: '100%', overflowX: 'hidden' }}>
       {/* Mobile AppBar */}
       <AppBar
         position="fixed"
@@ -346,7 +346,7 @@ export default function Layout({ children }) {
         sx={{
           flexGrow: 1,
           minWidth: 0,
-          width: { xs: '100%', sm: `calc(100vw - ${DRAWER_WIDTH}px)` },
+          width: '100%',
           mt: { xs: '52px', sm: 0 },
           bgcolor: 'background.default',
           minHeight: '100vh',
@@ -355,15 +355,17 @@ export default function Layout({ children }) {
       >
         <Box
           sx={{
-            p: { xs: 1.5, sm: 2.5, md: 3 },
-            maxWidth: 1400,
-            mx: 'auto',
+            p: { xs: 1, sm: 2, md: 2.5 },
+            maxWidth: 'none',
+            mx: 0,
             width: '100%',
             minWidth: 0,
             overflowX: 'hidden',
           }}
         >
-          {children}
+          <Box sx={{ width: '100%', minWidth: 0 }}>
+            {children}
+          </Box>
         </Box>
       </Box>
     </Box>

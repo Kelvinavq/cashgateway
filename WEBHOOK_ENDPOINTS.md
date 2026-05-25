@@ -377,6 +377,27 @@ Si la respuesta es inválida, el gateway reintenta la entrega y registra `ack_va
 
 ---
 
+## Detalle de entregas iniciales y updates
+
+El gateway distingue el tipo de entrega en `webhook_deliveries.delivery_kind`:
+
+| Tipo | CuÃ¡ndo se usa |
+|------|---------------|
+| `initial` | Primer reenvÃ­o del movimiento al dominio final |
+| `update` | ReenvÃ­o generado por `POST /api/webhooks/provider/hgcash/{token}/update` |
+| `manual_retry` | Reintento manual desde el panel |
+
+La tabla tambiÃ©n guarda:
+
+| Campo | DescripciÃ³n |
+|-------|-------------|
+| `initial_delivered_at` | Fecha/hora en que se entregÃ³ correctamente el alta inicial |
+| `last_update_delivered_at` | Fecha/hora de la Ãºltima actualizaciÃ³n entregada correctamente |
+
+En la pÃ¡gina **Entregas** se muestran el tipo, estado, HTTP, ACK, errores y fechas de entrega para saber si llegÃ³ el webhook inicial y si tambiÃ©n llegÃ³ su update.
+
+---
+
 ## Errores posibles
 
 | HTTP | Motivo |
